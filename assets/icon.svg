@@ -1,0 +1,32 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <linearGradient id="bgGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#18181b"/>
+      <stop offset="100%" stop-color="#09090b"/>
+    </linearGradient>
+    <linearGradient id="accentGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#38bdf8"/>
+      <stop offset="100%" stop-color="#0284c7"/>
+    </linearGradient>
+    <filter id="glow" x="-20%" y="-20%" width="140%" height="140%">
+      <feGaussianBlur stdDeviation="12" result="blur"/>
+      <feComposite in="SourceGraphic" in2="blur" operator="over"/>
+    </filter>
+  </defs>
+
+  <!-- Background Squircle -->
+  <rect x="32" y="32" width="448" height="448" rx="112" fill="url(#bgGrad)" stroke="#27272a" stroke-width="8"/>
+
+  <!-- Stylized "B" / Editor Glyph inspired by Zed -->
+  <path d="M 160 144 L 280 144 C 330 144 364 172 364 216 C 364 246 342 270 312 280 C 352 290 376 320 376 360 C 376 410 334 436 280 436 L 160 436 Z" 
+        fill="none" stroke="url(#accentGrad)" stroke-width="32" stroke-linecap="round" stroke-linejoin="round" filter="url(#glow)"/>
+  
+  <!-- Inner Cutouts -->
+  <path d="M 216 200 L 268 200 C 290 200 306 212 306 230 C 306 248 290 260 268 260 L 216 260 Z" 
+        fill="url(#accentGrad)" opacity="0.3"/>
+  <path d="M 216 316 L 274 316 C 298 316 316 330 316 350 C 316 370 298 384 274 384 L 216 384 Z" 
+        fill="url(#accentGrad)" opacity="0.3"/>
+
+  <!-- Minimalist Code Accent Line -->
+  <circle cx="396" cy="144" r="16" fill="#38bdf8"/>
+</svg>

@@ -1,0 +1,12 @@
+[Desktop Entry]
+Name=bmvp-text
+GenericName=Code Editor
+Comment=Lightweight high-performance code editor inspired by Zed
+Exec=bmvp-text %F
+Terminal=false
+Type=Application
+Icon=bmvp-text
+Categories=Development;TextEditor;Utility;
+MimeType=text/plain;text/x-rust;text/x-c;text/x-c++;application/json;text/markdown;
+StartupNotify=true
+StartupWMClass=bmvp-text

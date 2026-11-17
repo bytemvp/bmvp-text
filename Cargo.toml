@@ -1,0 +1,28 @@
+[package]
+name = "bmvp-text"
+version = "0.1.0"
+edition = "2024"
+authors = ["ByteMVP Team <dev@bytemvp.com>"]
+description = "A lightweight, high-performance code editor inspired by Zed, built with pure Rust and GPUI."
+readme = "README.md"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/bytemvp/bmvp-text"
+keywords = ["editor", "zed", "gpui", "text-editor", "rust"]
+categories = ["development-tools", "text-editors"]
+
+[dependencies]
+gpui = "0.2"
+ropey = "1.6"
+anyhow = "1.0"
+rfd = "0.18.0"
+walkdir = "2.5.0"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+raw-window-handle = "0.6"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+panic = "abort"
+strip = true
