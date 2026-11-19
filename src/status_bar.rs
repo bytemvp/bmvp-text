@@ -1,7 +1,7 @@
-use gpui::*;
 use crate::buffer::TextBuffer;
 use crate::settings::EditorSettings;
 use crate::theme::Theme;
+use gpui::*;
 
 pub struct StatusBar;
 
@@ -35,13 +35,7 @@ impl StatusBar {
                 buf.is_dirty(),
             )
         } else {
-            (
-                "--".to_string(),
-                String::new(),
-                "Plain Text",
-                "LF",
-                false,
-            )
+            ("--".to_string(), String::new(), "Plain Text", "LF", false)
         };
 
         div()
@@ -78,13 +72,20 @@ impl StatusBar {
                             } else {
                                 theme.text_muted
                             })
-                            .bg(if show_sidebar { theme.bg_hover } else { theme.bg_activity_bar })
+                            .bg(if show_sidebar {
+                                theme.bg_hover
+                            } else {
+                                theme.bg_activity_bar
+                            })
                             .child("≡")
                             .child("Explorer")
-                            .on_mouse_down(MouseButton::Left, cx.listener(|this, _, _win, cx| {
-                                this.show_sidebar = !this.show_sidebar;
-                                cx.notify();
-                            })),
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(|this, _, _win, cx| {
+                                    this.show_sidebar = !this.show_sidebar;
+                                    cx.notify();
+                                }),
+                            ),
                     )
                     // Git 分支标识
                     .child(
@@ -102,17 +103,11 @@ impl StatusBar {
                             .flex()
                             .items_center()
                             .gap_1()
-                            .child(
-                                div()
-                                    .w(px(6.0))
-                                    .h(px(6.0))
-                                    .rounded_full()
-                                    .bg(if is_dirty {
-                                        theme.dirty_indicator
-                                    } else {
-                                        theme.accent
-                                    }),
-                            )
+                            .child(div().w(px(6.0)).h(px(6.0)).rounded_full().bg(if is_dirty {
+                                theme.dirty_indicator
+                            } else {
+                                theme.accent
+                            }))
                             .child(
                                 div()
                                     .text_color(if is_dirty {
@@ -133,14 +128,25 @@ impl StatusBar {
                             .items_center()
                             .gap_1()
                             .cursor_pointer()
-                            .bg(if show_terminal { theme.bg_hover } else { theme.bg_activity_bar })
+                            .bg(if show_terminal {
+                                theme.bg_hover
+                            } else {
+                                theme.bg_activity_bar
+                            })
                             .hover(|s| s.bg(theme.bg_hover).text_color(theme.text_primary))
-                            .text_color(if show_terminal { theme.accent } else { theme.text_muted })
+                            .text_color(if show_terminal {
+                                theme.accent
+                            } else {
+                                theme.text_muted
+                            })
                             .child(">_")
                             .child("Terminal")
-                            .on_mouse_down(MouseButton::Left, cx.listener(|this, _, _win, cx| {
-                                this.toggle_terminal(cx);
-                            })),
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(|this, _, _win, cx| {
+                                    this.toggle_terminal(cx);
+                                }),
+                            ),
                     ),
             )
             // 右边：光标信息、选区、缩进空格数、编码、换行符、语言类型、设置入口
@@ -161,11 +167,7 @@ impl StatusBar {
                             .text_color(theme.text_primary)
                             .child(pos_text)
                             .children(if !sel_text.is_empty() {
-                                Some(
-                                    div()
-                                        .text_color(theme.accent)
-                                        .child(sel_text),
-                                )
+                                Some(div().text_color(theme.accent).child(sel_text))
                             } else {
                                 None
                             }),
@@ -182,28 +184,23 @@ impl StatusBar {
                             .hover(|s| s.bg(theme.bg_hover).text_color(theme.text_primary))
                             .text_color(theme.text_secondary)
                             .child(format!("Spaces: {}", settings.tab_size))
-                            .on_mouse_down(MouseButton::Left, cx.listener(|this, _, _win, cx| {
-                                this.settings.tab_size = match this.settings.tab_size {
-                                    2 => 4,
-                                    4 => 8,
-                                    _ => 2,
-                                };
-                                this.save_config();
-                                cx.notify();
-                            })),
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(|this, _, _win, cx| {
+                                    this.settings.tab_size = match this.settings.tab_size {
+                                        2 => 4,
+                                        4 => 8,
+                                        _ => 2,
+                                    };
+                                    this.save_config();
+                                    cx.notify();
+                                }),
+                            ),
                     )
                     // 编码
-                    .child(
-                        div()
-                            .text_color(theme.text_muted)
-                            .child("UTF-8"),
-                    )
+                    .child(div().text_color(theme.text_muted).child("UTF-8"))
                     // 换行格式 LF/CRLF
-                    .child(
-                        div()
-                            .text_color(theme.text_muted)
-                            .child(line_ending),
-                    )
+                    .child(div().text_color(theme.text_muted).child(line_ending))
                     // 语言指示药丸 (Rust, TOML, Markdown, etc.)
                     .child(
                         div()
@@ -231,10 +228,13 @@ impl StatusBar {
                             .hover(|s| s.bg(theme.bg_hover).text_color(theme.text_primary))
                             .text_color(theme.text_muted)
                             .child("⚙")
-                            .on_mouse_down(MouseButton::Left, cx.listener(|this, _, _win, cx| {
-                                this.show_settings = !this.show_settings;
-                                cx.notify();
-                            })),
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(|this, _, _win, cx| {
+                                    this.show_settings = !this.show_settings;
+                                    cx.notify();
+                                }),
+                            ),
                     ),
             )
     }

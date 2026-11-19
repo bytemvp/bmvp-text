@@ -86,7 +86,8 @@ impl Sidebar {
 
         // 文件夹在前，其次按名称不区分大小写排序
         entries.sort_by(|a, b| {
-            b.2.cmp(&a.2).then_with(|| a.1.to_lowercase().cmp(&b.1.to_lowercase()))
+            b.2.cmp(&a.2)
+                .then_with(|| a.1.to_lowercase().cmp(&b.1.to_lowercase()))
         });
 
         for (path, name, is_dir) in entries {
@@ -106,27 +107,27 @@ impl Sidebar {
     }
 
     pub fn toggle_expand(&mut self, idx: usize) {
-        if let Some(item) = self.items.get(idx) {
-            if item.is_dir {
-                let path = item.path.clone();
-                let new_state = !item.is_expanded;
-                let mut expanded_paths: std::collections::HashSet<PathBuf> = self
-                    .items
-                    .iter()
-                    .filter(|i| i.is_dir && i.is_expanded)
-                    .map(|i| i.path.clone())
-                    .collect();
+        if let Some(item) = self.items.get(idx)
+            && item.is_dir
+        {
+            let path = item.path.clone();
+            let new_state = !item.is_expanded;
+            let mut expanded_paths: std::collections::HashSet<PathBuf> = self
+                .items
+                .iter()
+                .filter(|i| i.is_dir && i.is_expanded)
+                .map(|i| i.path.clone())
+                .collect();
 
-                if new_state {
-                    expanded_paths.insert(path);
-                } else {
-                    expanded_paths.remove(&path);
-                }
+            if new_state {
+                expanded_paths.insert(path);
+            } else {
+                expanded_paths.remove(&path);
+            }
 
-                if let Some(ref root) = self.root_path.clone() {
-                    self.items.clear();
-                    Self::collect_children(root, 0, &expanded_paths, &mut self.items);
-                }
+            if let Some(ref root) = self.root_path.clone() {
+                self.items.clear();
+                Self::collect_children(root, 0, &expanded_paths, &mut self.items);
             }
         }
     }
@@ -160,11 +161,25 @@ impl Sidebar {
             "<>"
         } else if lower.ends_with(".css") || lower.ends_with(".scss") || lower.ends_with(".sass") {
             "css"
-        } else if lower.ends_with(".sh") || lower.ends_with(".bash") || lower.ends_with(".bat") || lower.ends_with(".cmd") || lower.ends_with(".ps1") {
+        } else if lower.ends_with(".sh")
+            || lower.ends_with(".bash")
+            || lower.ends_with(".bat")
+            || lower.ends_with(".cmd")
+            || lower.ends_with(".ps1")
+        {
             "sh"
-        } else if lower.ends_with(".c") || lower.ends_with(".cpp") || lower.ends_with(".cc") || lower.ends_with(".h") || lower.ends_with(".hpp") {
+        } else if lower.ends_with(".c")
+            || lower.ends_with(".cpp")
+            || lower.ends_with(".cc")
+            || lower.ends_with(".h")
+            || lower.ends_with(".hpp")
+        {
             "c"
-        } else if lower.ends_with(".svg") || lower.ends_with(".png") || lower.ends_with(".jpg") || lower.ends_with(".ico") {
+        } else if lower.ends_with(".svg")
+            || lower.ends_with(".png")
+            || lower.ends_with(".jpg")
+            || lower.ends_with(".ico")
+        {
             "img"
         } else if lower.ends_with(".txt") {
             "txt"

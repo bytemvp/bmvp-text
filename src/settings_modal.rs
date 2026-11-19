@@ -1,6 +1,6 @@
-use gpui::*;
 use crate::settings::EditorSettings;
 use crate::theme::{Theme, ThemeMode};
+use gpui::*;
 
 pub struct SettingsModal;
 
@@ -26,8 +26,16 @@ impl SettingsModal {
         let mut theme_buttons = Vec::new();
         for &mode in ThemeMode::all() {
             let is_selected = mode == current_theme;
-            let bg = if is_selected { theme.accent } else { theme.bg_hover };
-            let fg = if is_selected { text_on_accent } else { theme.text_secondary };
+            let bg = if is_selected {
+                theme.accent
+            } else {
+                theme.bg_hover
+            };
+            let fg = if is_selected {
+                text_on_accent
+            } else {
+                theme.text_secondary
+            };
 
             theme_buttons.push(
                 div()
@@ -39,11 +47,18 @@ impl SettingsModal {
                     .text_color(fg)
                     .hover(|s| s.opacity(0.85))
                     .text_xs()
-                    .font_weight(if is_selected { FontWeight::BOLD } else { FontWeight::NORMAL })
+                    .font_weight(if is_selected {
+                        FontWeight::BOLD
+                    } else {
+                        FontWeight::NORMAL
+                    })
                     .child(mode.name())
-                    .on_mouse_down(MouseButton::Left, cx.listener(move |this, _, _win, cx| {
-                        this.set_theme_mode(mode, cx);
-                    })),
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(move |this, _, _win, cx| {
+                            this.set_theme_mode(mode, cx);
+                        }),
+                    ),
             );
         }
 
@@ -51,8 +66,16 @@ impl SettingsModal {
         let mut font_buttons = Vec::new();
         for &font in EditorSettings::AVAILABLE_FONTS {
             let is_selected = font == current_font;
-            let bg = if is_selected { theme.accent } else { theme.bg_hover };
-            let fg = if is_selected { text_on_accent } else { theme.text_secondary };
+            let bg = if is_selected {
+                theme.accent
+            } else {
+                theme.bg_hover
+            };
+            let fg = if is_selected {
+                text_on_accent
+            } else {
+                theme.text_secondary
+            };
             let font_name = font.to_string();
 
             font_buttons.push(
@@ -67,11 +90,14 @@ impl SettingsModal {
                     .text_xs()
                     .font_family(font)
                     .child(font)
-                    .on_mouse_down(MouseButton::Left, cx.listener(move |this, _, _win, cx| {
-                        this.settings.font_family = font_name.clone();
-                        this.save_config();
-                        cx.notify();
-                    })),
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(move |this, _, _win, cx| {
+                            this.settings.font_family = font_name.clone();
+                            this.save_config();
+                            cx.notify();
+                        }),
+                    ),
             );
         }
 
@@ -79,8 +105,16 @@ impl SettingsModal {
         let mut size_buttons = Vec::new();
         for &size in EditorSettings::AVAILABLE_FONT_SIZES {
             let is_selected = (size - current_size).abs() < f32::EPSILON;
-            let bg = if is_selected { theme.accent } else { theme.bg_hover };
-            let fg = if is_selected { text_on_accent } else { theme.text_secondary };
+            let bg = if is_selected {
+                theme.accent
+            } else {
+                theme.bg_hover
+            };
+            let fg = if is_selected {
+                text_on_accent
+            } else {
+                theme.text_secondary
+            };
 
             size_buttons.push(
                 div()
@@ -93,11 +127,14 @@ impl SettingsModal {
                     .hover(|s| s.opacity(0.85))
                     .text_xs()
                     .child(format!("{:.0}", size))
-                    .on_mouse_down(MouseButton::Left, cx.listener(move |this, _, _win, cx| {
-                        this.settings.font_size = size;
-                        this.save_config();
-                        cx.notify();
-                    })),
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(move |this, _, _win, cx| {
+                            this.settings.font_size = size;
+                            this.save_config();
+                            cx.notify();
+                        }),
+                    ),
             );
         }
 
@@ -105,8 +142,16 @@ impl SettingsModal {
         let mut shell_buttons = Vec::new();
         for &(shell_title, shell_bin) in EditorSettings::AVAILABLE_SHELLS {
             let is_selected = shell_bin == current_shell;
-            let bg = if is_selected { theme.accent } else { theme.bg_hover };
-            let fg = if is_selected { text_on_accent } else { theme.text_secondary };
+            let bg = if is_selected {
+                theme.accent
+            } else {
+                theme.bg_hover
+            };
+            let fg = if is_selected {
+                text_on_accent
+            } else {
+                theme.text_secondary
+            };
             let bin_name = shell_bin.to_string();
 
             shell_buttons.push(
@@ -119,14 +164,21 @@ impl SettingsModal {
                     .text_color(fg)
                     .hover(|s| s.opacity(0.85))
                     .text_xs()
-                    .font_weight(if is_selected { FontWeight::BOLD } else { FontWeight::NORMAL })
+                    .font_weight(if is_selected {
+                        FontWeight::BOLD
+                    } else {
+                        FontWeight::NORMAL
+                    })
                     .child(shell_title)
-                    .on_mouse_down(MouseButton::Left, cx.listener(move |this, _, _win, cx| {
-                        this.settings.terminal_shell = bin_name.clone();
-                        this.restart_terminal();
-                        this.save_config();
-                        cx.notify();
-                    })),
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(move |this, _, _win, cx| {
+                            this.settings.terminal_shell = bin_name.clone();
+                            this.restart_terminal();
+                            this.save_config();
+                            cx.notify();
+                        }),
+                    ),
             );
         }
 
@@ -134,8 +186,16 @@ impl SettingsModal {
         let mut term_font_buttons = Vec::new();
         for &font in EditorSettings::AVAILABLE_FONTS {
             let is_selected = font == current_term_font;
-            let bg = if is_selected { theme.accent } else { theme.bg_hover };
-            let fg = if is_selected { text_on_accent } else { theme.text_secondary };
+            let bg = if is_selected {
+                theme.accent
+            } else {
+                theme.bg_hover
+            };
+            let fg = if is_selected {
+                text_on_accent
+            } else {
+                theme.text_secondary
+            };
             let font_name = font.to_string();
 
             term_font_buttons.push(
@@ -150,11 +210,14 @@ impl SettingsModal {
                     .text_xs()
                     .font_family(font)
                     .child(font)
-                    .on_mouse_down(MouseButton::Left, cx.listener(move |this, _, _win, cx| {
-                        this.settings.terminal_font_family = font_name.clone();
-                        this.save_config();
-                        cx.notify();
-                    })),
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(move |this, _, _win, cx| {
+                            this.settings.terminal_font_family = font_name.clone();
+                            this.save_config();
+                            cx.notify();
+                        }),
+                    ),
             );
         }
 
@@ -162,8 +225,16 @@ impl SettingsModal {
         let mut term_size_buttons = Vec::new();
         for &size in EditorSettings::AVAILABLE_FONT_SIZES {
             let is_selected = (size - current_term_size).abs() < f32::EPSILON;
-            let bg = if is_selected { theme.accent } else { theme.bg_hover };
-            let fg = if is_selected { text_on_accent } else { theme.text_secondary };
+            let bg = if is_selected {
+                theme.accent
+            } else {
+                theme.bg_hover
+            };
+            let fg = if is_selected {
+                text_on_accent
+            } else {
+                theme.text_secondary
+            };
 
             term_size_buttons.push(
                 div()
@@ -176,11 +247,14 @@ impl SettingsModal {
                     .hover(|s| s.opacity(0.85))
                     .text_xs()
                     .child(format!("{:.0}", size))
-                    .on_mouse_down(MouseButton::Left, cx.listener(move |this, _, _win, cx| {
-                        this.settings.terminal_font_size = size;
-                        this.save_config();
-                        cx.notify();
-                    })),
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(move |this, _, _win, cx| {
+                            this.settings.terminal_font_size = size;
+                            this.save_config();
+                            cx.notify();
+                        }),
+                    ),
             );
         }
 
@@ -188,8 +262,16 @@ impl SettingsModal {
         let mut tab_buttons = Vec::new();
         for &tab_size in EditorSettings::AVAILABLE_TAB_SIZES {
             let is_selected = tab_size == current_tab;
-            let bg = if is_selected { theme.accent } else { theme.bg_hover };
-            let fg = if is_selected { text_on_accent } else { theme.text_secondary };
+            let bg = if is_selected {
+                theme.accent
+            } else {
+                theme.bg_hover
+            };
+            let fg = if is_selected {
+                text_on_accent
+            } else {
+                theme.text_secondary
+            };
 
             tab_buttons.push(
                 div()
@@ -202,11 +284,14 @@ impl SettingsModal {
                     .hover(|s| s.opacity(0.85))
                     .text_xs()
                     .child(format!("{} spaces", tab_size))
-                    .on_mouse_down(MouseButton::Left, cx.listener(move |this, _, _win, cx| {
-                        this.settings.tab_size = tab_size;
-                        this.save_config();
-                        cx.notify();
-                    })),
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(move |this, _, _win, cx| {
+                            this.settings.tab_size = tab_size;
+                            this.save_config();
+                            cx.notify();
+                        }),
+                    ),
             );
         }
 
@@ -216,16 +301,27 @@ impl SettingsModal {
             .py_1()
             .rounded_sm()
             .cursor_pointer()
-            .bg(if show_line_num { theme.accent } else { theme.bg_hover })
-            .text_color(if show_line_num { text_on_accent } else { theme.text_secondary })
+            .bg(if show_line_num {
+                theme.accent
+            } else {
+                theme.bg_hover
+            })
+            .text_color(if show_line_num {
+                text_on_accent
+            } else {
+                theme.text_secondary
+            })
             .text_xs()
             .font_weight(FontWeight::MEDIUM)
             .child(if show_line_num { "Enabled" } else { "Disabled" })
-            .on_mouse_down(MouseButton::Left, cx.listener(|this, _, _win, cx| {
-                this.settings.show_line_numbers = !this.settings.show_line_numbers;
-                this.save_config();
-                cx.notify();
-            }));
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|this, _, _win, cx| {
+                    this.settings.show_line_numbers = !this.settings.show_line_numbers;
+                    this.save_config();
+                    cx.notify();
+                }),
+            );
 
         // Zed 风格弹窗
         div()
@@ -236,10 +332,13 @@ impl SettingsModal {
             .items_center()
             .pt(px(40.0))
             .bg(hsla(0.0, 0.0, 0.0, 0.65))
-            .on_mouse_down(MouseButton::Left, cx.listener(|this, _, _win, cx| {
-                this.show_settings = false;
-                cx.notify();
-            }))
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|this, _, _win, cx| {
+                    this.show_settings = false;
+                    cx.notify();
+                }),
+            )
             .child(
                 div()
                     .w(px(620.0))
@@ -293,10 +392,13 @@ impl SettingsModal {
                                     .text_color(theme.text_muted)
                                     .text_xs()
                                     .child("✕")
-                                    .on_mouse_down(MouseButton::Left, cx.listener(|this, _, _win, cx| {
-                                        this.show_settings = false;
-                                        cx.notify();
-                                    })),
+                                    .on_mouse_down(
+                                        MouseButton::Left,
+                                        cx.listener(|this, _, _win, cx| {
+                                            this.show_settings = false;
+                                            cx.notify();
+                                        }),
+                                    ),
                             ),
                     )
                     // 设置主体内容区
@@ -319,7 +421,9 @@ impl SettingsModal {
                                             .text_color(theme.text_secondary)
                                             .child("Color Theme"),
                                     )
-                                    .child(div().flex().flex_wrap().gap_1p5().children(theme_buttons)),
+                                    .child(
+                                        div().flex().flex_wrap().gap_1p5().children(theme_buttons),
+                                    ),
                             )
                             // 2. 终端配置区块 (Terminal Shell & Font)
                             .child(
@@ -349,8 +453,14 @@ impl SettingsModal {
                                                     .font_weight(FontWeight::MEDIUM)
                                                     .text_color(theme.text_secondary)
                                                     .child("Terminal Shell Program"),
-                                             )
-                                            .child(div().flex().flex_wrap().gap_1p5().children(shell_buttons)),
+                                            )
+                                            .child(
+                                                div()
+                                                    .flex()
+                                                    .flex_wrap()
+                                                    .gap_1p5()
+                                                    .children(shell_buttons),
+                                            ),
                                     )
                                     // 终端字体
                                     .child(
@@ -365,7 +475,13 @@ impl SettingsModal {
                                                     .text_color(theme.text_secondary)
                                                     .child("Terminal Font Family"),
                                             )
-                                            .child(div().flex().flex_wrap().gap_1p5().children(term_font_buttons)),
+                                            .child(
+                                                div()
+                                                    .flex()
+                                                    .flex_wrap()
+                                                    .gap_1p5()
+                                                    .children(term_font_buttons),
+                                            ),
                                     )
                                     // 终端字号
                                     .child(
@@ -380,7 +496,13 @@ impl SettingsModal {
                                                     .text_color(theme.text_secondary)
                                                     .child("Terminal Font Size"),
                                             )
-                                            .child(div().flex().flex_wrap().gap_1p5().children(term_size_buttons)),
+                                            .child(
+                                                div()
+                                                    .flex()
+                                                    .flex_wrap()
+                                                    .gap_1p5()
+                                                    .children(term_size_buttons),
+                                            ),
                                     ),
                             )
                             // 3. 编辑器字体与格式化区块
@@ -411,7 +533,13 @@ impl SettingsModal {
                                                     .text_color(theme.text_secondary)
                                                     .child("Editor Font Family"),
                                             )
-                                            .child(div().flex().flex_wrap().gap_1p5().children(font_buttons)),
+                                            .child(
+                                                div()
+                                                    .flex()
+                                                    .flex_wrap()
+                                                    .gap_1p5()
+                                                    .children(font_buttons),
+                                            ),
                                     )
                                     .child(
                                         div()
@@ -425,7 +553,13 @@ impl SettingsModal {
                                                     .text_color(theme.text_secondary)
                                                     .child("Editor Font Size"),
                                             )
-                                            .child(div().flex().flex_wrap().gap_1p5().children(size_buttons)),
+                                            .child(
+                                                div()
+                                                    .flex()
+                                                    .flex_wrap()
+                                                    .gap_1p5()
+                                                    .children(size_buttons),
+                                            ),
                                     ),
                             )
                             // 4. 底部杂项

@@ -1,4 +1,3 @@
-use gpui::*;
 use crate::buffer::TextBuffer;
 use crate::file_finder::FileFinder;
 use crate::find_replace::FindState;
@@ -9,6 +8,7 @@ use crate::status_bar::StatusBar;
 use crate::syntax::{highlight_line, token_color};
 use crate::system_terminal::SystemTerminal;
 use crate::theme::{Theme, ThemeMode};
+use gpui::*;
 use std::path::{Path, PathBuf};
 
 pub struct EditorView {
@@ -119,11 +119,9 @@ fn main() {
         self.show_terminal = !self.show_terminal;
         if self.show_terminal {
             if self.terminals.is_empty() {
-                let dir = self
-                    .sidebar
-                    .root_path
-                    .clone()
-                    .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
+                let dir = self.sidebar.root_path.clone().unwrap_or_else(|| {
+                    std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
+                });
                 let id = self.next_terminal_id;
                 self.next_terminal_id += 1;
                 let title = format!("cmd {}", id);
@@ -193,29 +191,32 @@ fn main() {
                 async move {
                     loop {
                         background.timer(std::time::Duration::from_millis(30)).await;
-                        let should_continue = view.update(&mut cx, |this, cx| {
-                            let mut any_running = false;
-                            let mut had_output = false;
-                            for term in &mut this.terminals {
-                                if term.poll_output() {
-                                    had_output = true;
+                        let should_continue = view
+                            .update(&mut cx, |this, cx| {
+                                let mut any_running = false;
+                                let mut had_output = false;
+                                for term in &mut this.terminals {
+                                    if term.poll_output() {
+                                        had_output = true;
+                                    }
+                                    if term.is_running {
+                                        any_running = true;
+                                    }
                                 }
-                                if term.is_running {
-                                    any_running = true;
+                                if had_output {
+                                    cx.notify();
                                 }
-                            }
-                            if had_output {
-                                cx.notify();
-                            }
-                            any_running
-                        }).unwrap_or(false);
+                                any_running
+                            })
+                            .unwrap_or(false);
 
                         if !should_continue {
                             break;
                         }
                     }
                 }
-            }).detach();
+            })
+            .detach();
         }
     }
 
@@ -235,13 +236,13 @@ fn main() {
 
     pub fn open_file_path(&mut self, path: &Path, cx: &mut Context<Self>) {
         for (idx, tab) in self.tabs.iter().enumerate() {
-            if let Some(tab_path) = tab.file_path() {
-                if Path::new(tab_path) == path {
-                    self.active_tab = idx;
-                    self.terminal_focused = false;
-                    cx.notify();
-                    return;
-                }
+            if let Some(tab_path) = tab.file_path()
+                && Path::new(tab_path) == path
+            {
+                self.active_tab = idx;
+                self.terminal_focused = false;
+                cx.notify();
+                return;
             }
         }
 
@@ -307,13 +308,13 @@ fn main() {
     pub fn open_find_bar(&mut self, cx: &mut Context<Self>) {
         self.find_state.open();
         self.find_focused = true;
-        if let Some(buf) = self.current_buffer() {
-            if let Some(sel_text) = buf.selected_text() {
-                if !sel_text.contains('\n') && !sel_text.trim().is_empty() {
-                    self.find_state.query = sel_text;
-                    self.update_find_matches();
-                }
-            }
+        if let Some(buf) = self.current_buffer()
+            && let Some(sel_text) = buf.selected_text()
+            && !sel_text.contains('\n')
+            && !sel_text.trim().is_empty()
+        {
+            self.find_state.query = sel_text;
+            self.update_find_matches();
         }
         cx.notify();
     }
@@ -356,10 +357,10 @@ fn main() {
     }
 
     pub fn copy_selection(&mut self, cx: &mut Context<Self>) {
-        if let Some(buf) = self.current_buffer() {
-            if let Some(text) = buf.selected_text() {
-                cx.write_to_clipboard(ClipboardItem::new_string(text));
-            }
+        if let Some(buf) = self.current_buffer()
+            && let Some(text) = buf.selected_text()
+        {
+            cx.write_to_clipboard(ClipboardItem::new_string(text));
         }
     }
 
@@ -372,17 +373,21 @@ fn main() {
     }
 
     pub fn paste_clipboard(&mut self, cx: &mut Context<Self>) {
-        if let Some(item) = cx.read_from_clipboard() {
-            if let Some(text) = item.text() {
-                if let Some(buf) = self.current_buffer_mut() {
-                    buf.insert(&text);
-                    cx.notify();
-                }
-            }
+        if let Some(item) = cx.read_from_clipboard()
+            && let Some(text) = item.text()
+            && let Some(buf) = self.current_buffer_mut()
+        {
+            buf.insert(&text);
+            cx.notify();
         }
     }
 
-    fn handle_mouse_move(&mut self, event: &MouseMoveEvent, window: &mut Window, cx: &mut Context<Self>) {
+    fn handle_mouse_move(
+        &mut self,
+        event: &MouseMoveEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if self.resizing_sidebar {
             let x: f32 = event.position.x.into();
             let win_w: f32 = window.viewport_size().width.into();
@@ -405,7 +410,12 @@ fn main() {
         }
     }
 
-    fn handle_mouse_up(&mut self, event: &MouseUpEvent, _window: &mut Window, cx: &mut Context<Self>) {
+    fn handle_mouse_up(
+        &mut self,
+        event: &MouseUpEvent,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if event.button == MouseButton::Left && (self.resizing_sidebar || self.resizing_terminal) {
             self.resizing_sidebar = false;
             self.resizing_terminal = false;
@@ -414,7 +424,12 @@ fn main() {
         }
     }
 
-    fn handle_key_down(&mut self, event: &KeyDownEvent, _window: &mut Window, cx: &mut Context<Self>) {
+    fn handle_key_down(
+        &mut self,
+        event: &KeyDownEvent,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let key = event.keystroke.key.as_str();
         let is_shift = event.keystroke.modifiers.shift;
         let is_ctrl = event.keystroke.modifiers.control || event.keystroke.modifiers.platform;
@@ -442,13 +457,13 @@ fn main() {
                     self.file_finder.refilter();
                 }
                 _ => {
-                    if !is_ctrl && event.keystroke.key.chars().count() == 1 {
-                        if let Some(ch) = event.keystroke.key.chars().next() {
-                            if !ch.is_control() {
-                                self.file_finder.query.push(ch);
-                                self.file_finder.refilter();
-                            }
-                        }
+                    if !is_ctrl
+                        && event.keystroke.key.chars().count() == 1
+                        && let Some(ch) = event.keystroke.key.chars().next()
+                        && !ch.is_control()
+                    {
+                        self.file_finder.query.push(ch);
+                        self.file_finder.refilter();
                     }
                 }
             }
@@ -493,15 +508,15 @@ fn main() {
                 cx.notify();
                 return;
             }
-            if !is_ctrl && event.keystroke.key.chars().count() == 1 {
-                if let Some(ch) = event.keystroke.key.chars().next() {
-                    if !ch.is_control() {
-                        self.find_state.query.push(ch);
-                        self.update_find_matches();
-                        cx.notify();
-                        return;
-                    }
-                }
+            if !is_ctrl
+                && event.keystroke.key.chars().count() == 1
+                && let Some(ch) = event.keystroke.key.chars().next()
+                && !ch.is_control()
+            {
+                self.find_state.query.push(ch);
+                self.update_find_matches();
+                cx.notify();
+                return;
             }
         }
 
@@ -572,15 +587,15 @@ fn main() {
                         return;
                     }
                     "v" | "V" => {
-                        if let Some(item) = cx.read_from_clipboard() {
-                            if let Some(text) = item.text() {
-                                let clean = text.replace("\r\n", " ").replace('\n', " ");
-                                if let Some(term) = self.current_terminal_mut() {
-                                    term.insert_str(&clean);
-                                    cx.notify();
-                                }
-                                return;
+                        if let Some(item) = cx.read_from_clipboard()
+                            && let Some(text) = item.text()
+                        {
+                            let clean = text.replace("\r\n", " ").replace('\n', " ");
+                            if let Some(term) = self.current_terminal_mut() {
+                                term.insert_str(&clean);
+                                cx.notify();
                             }
+                            return;
                         }
                     }
                     _ => {}
@@ -662,12 +677,13 @@ fn main() {
                         return;
                     }
                     _ => {
-                        if let Some(ch) = event.keystroke.key.chars().next() {
-                            if event.keystroke.key.chars().count() == 1 && !ch.is_control() {
-                                term.insert_char(ch);
-                                cx.notify();
-                                return;
-                            }
+                        if let Some(ch) = event.keystroke.key.chars().next()
+                            && event.keystroke.key.chars().count() == 1
+                            && !ch.is_control()
+                        {
+                            term.insert_char(ch);
+                            cx.notify();
+                            return;
                         }
                     }
                 }
@@ -806,12 +822,12 @@ fn main() {
                 "home" => buf.move_home(is_shift),
                 "end" => buf.move_end(is_shift),
                 _ => {
-                    if !is_ctrl {
-                        if let Some(ch) = event.keystroke.key.chars().next() {
-                            if event.keystroke.key.chars().count() == 1 && !ch.is_control() {
-                                buf.insert_char(ch);
-                            }
-                        }
+                    if !is_ctrl
+                        && let Some(ch) = event.keystroke.key.chars().next()
+                        && event.keystroke.key.chars().count() == 1
+                        && !ch.is_control()
+                    {
+                        buf.insert_char(ch);
                     }
                 }
             }
@@ -877,7 +893,11 @@ impl Render for EditorView {
                     .gap_1p5()
                     .cursor_pointer()
                     .hover(|s| s.bg(theme.bg_hover))
-                    .text_color(if is_dir { theme.text_primary } else { theme.text_secondary })
+                    .text_color(if is_dir {
+                        theme.text_primary
+                    } else {
+                        theme.text_secondary
+                    })
                     .text_xs()
                     .child(
                         div()
@@ -889,19 +909,26 @@ impl Render for EditorView {
                         div()
                             .w(px(20.0))
                             .text_xs()
-                            .text_color(if is_dir { theme.accent } else { theme.text_muted })
+                            .text_color(if is_dir {
+                                theme.accent
+                            } else {
+                                theme.text_muted
+                            })
                             .font_family("Consolas")
                             .child(icon),
                     )
                     .child(div().child(item.name.clone()))
-                    .on_mouse_down(MouseButton::Left, cx.listener(move |this, _, _win, cx| {
-                        if is_dir {
-                            this.sidebar.toggle_expand(idx);
-                        } else {
-                            this.open_file_path(&path, cx);
-                        }
-                        cx.notify();
-                    }));
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(move |this, _, _win, cx| {
+                            if is_dir {
+                                this.sidebar.toggle_expand(idx);
+                            } else {
+                                this.open_file_path(&path, cx);
+                            }
+                            cx.notify();
+                        }),
+                    );
 
                 file_items.push(item_div);
             }
@@ -924,32 +951,25 @@ impl Render for EditorView {
                             .border_b_1()
                             .border_color(theme.border_subtle)
                             .child(
-                                div()
-                                    .flex()
-                                    .items_center()
-                                    .gap_1p5()
-                                    .child(
-                                        div()
-                                            .text_xs()
-                                            .font_weight(FontWeight::MEDIUM)
-                                            .text_color(theme.text_primary)
-                                            .child(project_name.clone()),
-                                    ),
+                                div().flex().items_center().gap_1p5().child(
+                                    div()
+                                        .text_xs()
+                                        .font_weight(FontWeight::MEDIUM)
+                                        .text_color(theme.text_primary)
+                                        .child(project_name.clone()),
+                                ),
                             )
-                            .child(
-                                div()
-                                    .flex_1()
-                                    .h_full()
-                                    .cursor_default()
-                                    .on_mouse_down(MouseButton::Left, cx.listener(|_this, event: &MouseDownEvent, win, cx| {
-                                        if event.click_count == 2 {
-                                            crate::window_controls::toggle_maximize(win);
-                                            cx.notify();
-                                        } else {
-                                            crate::window_controls::start_window_drag(win);
-                                        }
-                                    })),
-                            )
+                            .child(div().flex_1().h_full().cursor_default().on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(|_this, event: &MouseDownEvent, win, cx| {
+                                    if event.click_count == 2 {
+                                        crate::window_controls::toggle_maximize(win);
+                                        cx.notify();
+                                    } else {
+                                        crate::window_controls::start_window_drag(win);
+                                    }
+                                }),
+                            ))
                             .child(
                                 div()
                                     .flex()
@@ -964,13 +984,18 @@ impl Render for EditorView {
                                             .items_center()
                                             .justify_center()
                                             .cursor_pointer()
-                                            .hover(|s| s.bg(theme.bg_hover).text_color(theme.text_primary))
+                                            .hover(|s| {
+                                                s.bg(theme.bg_hover).text_color(theme.text_primary)
+                                            })
                                             .text_color(theme.text_muted)
                                             .text_xs()
                                             .child("+")
-                                            .on_mouse_down(MouseButton::Left, cx.listener(|this, _, _win, cx| {
-                                                this.new_tab(cx);
-                                            })),
+                                            .on_mouse_down(
+                                                MouseButton::Left,
+                                                cx.listener(|this, _, _win, cx| {
+                                                    this.new_tab(cx);
+                                                }),
+                                            ),
                                     )
                                     .child(
                                         div()
@@ -981,14 +1006,19 @@ impl Render for EditorView {
                                             .items_center()
                                             .justify_center()
                                             .cursor_pointer()
-                                            .hover(|s| s.bg(theme.bg_hover).text_color(theme.text_primary))
+                                            .hover(|s| {
+                                                s.bg(theme.bg_hover).text_color(theme.text_primary)
+                                            })
                                             .text_color(theme.text_muted)
                                             .text_xs()
                                             .child("⟳")
-                                            .on_mouse_down(MouseButton::Left, cx.listener(|this, _, _win, cx| {
-                                                this.sidebar.refresh();
-                                                cx.notify();
-                                            })),
+                                            .on_mouse_down(
+                                                MouseButton::Left,
+                                                cx.listener(|this, _, _win, cx| {
+                                                    this.sidebar.refresh();
+                                                    cx.notify();
+                                                }),
+                                            ),
                                     )
                                     .child(
                                         div()
@@ -999,13 +1029,18 @@ impl Render for EditorView {
                                             .items_center()
                                             .justify_center()
                                             .cursor_pointer()
-                                            .hover(|s| s.bg(theme.bg_hover).text_color(theme.text_primary))
+                                            .hover(|s| {
+                                                s.bg(theme.bg_hover).text_color(theme.text_primary)
+                                            })
                                             .text_color(theme.text_muted)
                                             .text_xs()
                                             .child("📂")
-                                            .on_mouse_down(MouseButton::Left, cx.listener(|this, _, _win, cx| {
-                                                this.open_folder_dialog(cx);
-                                            })),
+                                            .on_mouse_down(
+                                                MouseButton::Left,
+                                                cx.listener(|this, _, _win, cx| {
+                                                    this.open_folder_dialog(cx);
+                                                }),
+                                            ),
                                     )
                                     .child(
                                         div()
@@ -1016,25 +1051,24 @@ impl Render for EditorView {
                                             .items_center()
                                             .justify_center()
                                             .cursor_pointer()
-                                            .hover(|s| s.bg(theme.bg_hover).text_color(theme.text_primary))
+                                            .hover(|s| {
+                                                s.bg(theme.bg_hover).text_color(theme.text_primary)
+                                            })
                                             .text_color(theme.text_muted)
                                             .text_xs()
                                             .child("‹")
-                                            .on_mouse_down(MouseButton::Left, cx.listener(|this, _, _win, cx| {
-                                                this.show_sidebar = false;
-                                                cx.notify();
-                                            })),
+                                            .on_mouse_down(
+                                                MouseButton::Left,
+                                                cx.listener(|this, _, _win, cx| {
+                                                    this.show_sidebar = false;
+                                                    cx.notify();
+                                                }),
+                                            ),
                                     ),
                             ),
                     )
                     // 树目录列表
-                    .child(
-                        div()
-                            .flex_1()
-                            .overflow_hidden()
-                            .py_1()
-                            .children(file_items),
-                    ),
+                    .child(div().flex_1().overflow_hidden().py_1().children(file_items)),
             )
         } else {
             None
@@ -1048,18 +1082,25 @@ impl Render for EditorView {
                     .w(px(4.0))
                     .h_full()
                     .cursor_col_resize()
-                    .bg(if is_resizing { theme.accent } else { theme.border_subtle })
+                    .bg(if is_resizing {
+                        theme.accent
+                    } else {
+                        theme.border_subtle
+                    })
                     .hover(|s| s.bg(theme.accent))
-                    .on_mouse_down(MouseButton::Left, cx.listener(|this, event: &MouseDownEvent, _win, cx| {
-                        if event.click_count == 2 {
-                            this.sidebar_width = 230.0;
-                            this.resizing_sidebar = false;
-                            this.save_config();
-                        } else {
-                            this.resizing_sidebar = true;
-                        }
-                        cx.notify();
-                    })),
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(|this, event: &MouseDownEvent, _win, cx| {
+                            if event.click_count == 2 {
+                                this.sidebar_width = 230.0;
+                                this.resizing_sidebar = false;
+                                this.save_config();
+                            } else {
+                                this.resizing_sidebar = true;
+                            }
+                            cx.notify();
+                        }),
+                    ),
             )
         } else {
             None
@@ -1087,10 +1128,13 @@ impl Render for EditorView {
                     .text_xs()
                     .child("≡")
                     .child("Explorer")
-                    .on_mouse_down(MouseButton::Left, cx.listener(|this, _, _win, cx| {
-                        this.show_sidebar = true;
-                        cx.notify();
-                    })),
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(|this, _, _win, cx| {
+                            this.show_sidebar = true;
+                            cx.notify();
+                        }),
+                    ),
             );
         }
 
@@ -1099,8 +1143,16 @@ impl Render for EditorView {
             let dirty = tab.is_dirty();
             let title = tab.file_name();
 
-            let tab_bg = if is_active { theme.bg_tab_active } else { theme.bg_tab_inactive };
-            let tab_fg = if is_active { theme.text_primary } else { theme.text_secondary };
+            let tab_bg = if is_active {
+                theme.bg_tab_active
+            } else {
+                theme.bg_tab_inactive
+            };
+            let tab_fg = if is_active {
+                theme.text_primary
+            } else {
+                theme.text_secondary
+            };
 
             let mut tab_btn = div()
                 .h(px(32.0))
@@ -1111,16 +1163,29 @@ impl Render for EditorView {
                 .bg(tab_bg)
                 .text_color(tab_fg)
                 .text_xs()
-                .font_weight(if is_active { FontWeight::MEDIUM } else { FontWeight::NORMAL })
+                .font_weight(if is_active {
+                    FontWeight::MEDIUM
+                } else {
+                    FontWeight::NORMAL
+                })
                 .border_r_1()
                 .border_color(theme.border_subtle)
                 .cursor_pointer()
-                .hover(|s| s.bg(if is_active { theme.bg_tab_active } else { theme.bg_hover }))
-                .on_mouse_down(MouseButton::Left, cx.listener(move |this, _, _win, cx| {
-                    this.active_tab = idx;
-                    this.terminal_focused = false;
-                    cx.notify();
-                }));
+                .hover(|s| {
+                    s.bg(if is_active {
+                        theme.bg_tab_active
+                    } else {
+                        theme.bg_hover
+                    })
+                })
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(move |this, _, _win, cx| {
+                        this.active_tab = idx;
+                        this.terminal_focused = false;
+                        cx.notify();
+                    }),
+                );
 
             if is_active {
                 tab_btn = tab_btn.border_t_1().border_color(theme.accent);
@@ -1159,9 +1224,12 @@ impl Render for EditorView {
                     .rounded_xs()
                     .hover(|s| s.bg(theme.bg_hover).text_color(theme.error))
                     .child("×")
-                    .on_mouse_down(MouseButton::Left, cx.listener(move |this, _, _win, cx| {
-                        this.close_tab(idx, cx);
-                    })),
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(move |this, _, _win, cx| {
+                            this.close_tab(idx, cx);
+                        }),
+                    ),
             );
 
             tab_elements.push(tab_btn);
@@ -1178,9 +1246,12 @@ impl Render for EditorView {
                 .text_color(theme.text_muted)
                 .hover(|s| s.bg(theme.bg_hover).text_color(theme.text_primary))
                 .child("+")
-                .on_mouse_down(MouseButton::Left, cx.listener(|this, _, _win, cx| {
-                    this.new_tab(cx);
-                })),
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(|this, _, _win, cx| {
+                        this.new_tab(cx);
+                    }),
+                ),
         );
 
         // 居中快速检索胶囊 (Zed Signature Command Palette Pill)
@@ -1197,20 +1268,18 @@ impl Render for EditorView {
             .px_3()
             .cursor_pointer()
             .hover(|s| s.border_color(theme.accent).bg(theme.bg_hover))
-            .on_mouse_down(MouseButton::Left, cx.listener(|this, _, _win, cx| {
-                this.open_file_finder(cx);
-            }))
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|this, _, _win, cx| {
+                    this.open_file_finder(cx);
+                }),
+            )
             .child(
                 div()
                     .flex()
                     .items_center()
                     .gap_2()
-                    .child(
-                        div()
-                            .text_xs()
-                            .text_color(theme.accent)
-                            .child("⌕"),
-                    )
+                    .child(div().text_xs().text_color(theme.accent).child("⌕"))
                     .child(
                         div()
                             .text_xs()
@@ -1245,14 +1314,25 @@ impl Render for EditorView {
                     .justify_center()
                     .cursor_pointer()
                     .hover(|s| s.bg(theme.bg_hover).text_color(theme.text_primary))
-                    .text_color(if self.show_sidebar { theme.accent } else { theme.text_muted })
-                    .bg(if self.show_sidebar { theme.bg_hover } else { theme.bg_surface })
+                    .text_color(if self.show_sidebar {
+                        theme.accent
+                    } else {
+                        theme.text_muted
+                    })
+                    .bg(if self.show_sidebar {
+                        theme.bg_hover
+                    } else {
+                        theme.bg_surface
+                    })
                     .text_xs()
                     .child("≡")
-                    .on_mouse_down(MouseButton::Left, cx.listener(|this, _, _win, cx| {
-                        this.show_sidebar = !this.show_sidebar;
-                        cx.notify();
-                    })),
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(|this, _, _win, cx| {
+                            this.show_sidebar = !this.show_sidebar;
+                            cx.notify();
+                        }),
+                    ),
             )
             .child(
                 div()
@@ -1264,13 +1344,24 @@ impl Render for EditorView {
                     .justify_center()
                     .cursor_pointer()
                     .hover(|s| s.bg(theme.bg_hover).text_color(theme.text_primary))
-                    .text_color(if self.show_terminal { theme.accent } else { theme.text_muted })
-                    .bg(if self.show_terminal { theme.bg_hover } else { theme.bg_surface })
+                    .text_color(if self.show_terminal {
+                        theme.accent
+                    } else {
+                        theme.text_muted
+                    })
+                    .bg(if self.show_terminal {
+                        theme.bg_hover
+                    } else {
+                        theme.bg_surface
+                    })
                     .text_xs()
                     .child(">_")
-                    .on_mouse_down(MouseButton::Left, cx.listener(|this, _, _win, cx| {
-                        this.toggle_terminal(cx);
-                    })),
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(|this, _, _win, cx| {
+                            this.toggle_terminal(cx);
+                        }),
+                    ),
             )
             .child(
                 div()
@@ -1282,14 +1373,25 @@ impl Render for EditorView {
                     .justify_center()
                     .cursor_pointer()
                     .hover(|s| s.bg(theme.bg_hover).text_color(theme.text_primary))
-                    .text_color(if self.show_settings { theme.accent } else { theme.text_muted })
-                    .bg(if self.show_settings { theme.bg_hover } else { theme.bg_surface })
+                    .text_color(if self.show_settings {
+                        theme.accent
+                    } else {
+                        theme.text_muted
+                    })
+                    .bg(if self.show_settings {
+                        theme.bg_hover
+                    } else {
+                        theme.bg_surface
+                    })
                     .text_xs()
                     .child("⚙")
-                    .on_mouse_down(MouseButton::Left, cx.listener(|this, _, _win, cx| {
-                        this.show_settings = !this.show_settings;
-                        cx.notify();
-                    })),
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(|this, _, _win, cx| {
+                            this.show_settings = !this.show_settings;
+                            cx.notify();
+                        }),
+                    ),
             );
 
         // Windows 窗口控制按钮 (最小化、最大化/恢复、关闭)
@@ -1310,9 +1412,12 @@ impl Render for EditorView {
                     .text_xs()
                     .text_color(theme.text_secondary)
                     .hover(|s| s.bg(theme.bg_hover).text_color(theme.text_primary))
-                    .on_mouse_down(MouseButton::Left, cx.listener(|_this, _, win, _cx| {
-                        crate::window_controls::minimize_window(win);
-                    }))
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(|_this, _, win, _cx| {
+                            crate::window_controls::minimize_window(win);
+                        }),
+                    )
                     .child("─"),
             )
             .child(
@@ -1326,10 +1431,13 @@ impl Render for EditorView {
                     .text_xs()
                     .text_color(theme.text_secondary)
                     .hover(|s| s.bg(theme.bg_hover).text_color(theme.text_primary))
-                    .on_mouse_down(MouseButton::Left, cx.listener(|_this, _, win, cx| {
-                        crate::window_controls::toggle_maximize(win);
-                        cx.notify();
-                    }))
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(|_this, _, win, cx| {
+                            crate::window_controls::toggle_maximize(win);
+                            cx.notify();
+                        }),
+                    )
                     .child(max_icon),
             )
             .child(
@@ -1343,9 +1451,12 @@ impl Render for EditorView {
                     .text_xs()
                     .text_color(theme.text_secondary)
                     .hover(|s| s.bg(rgb(0xe81123)).text_color(rgb(0xffffff)))
-                    .on_mouse_down(MouseButton::Left, cx.listener(|_this, _, _win, cx| {
-                        cx.quit();
-                    }))
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(|_this, _, _win, cx| {
+                            cx.quit();
+                        }),
+                    )
                     .child("✕"),
             );
 
@@ -1370,14 +1481,17 @@ impl Render for EditorView {
                     .h_full()
                     .gap_1p5()
                     .cursor_default()
-                    .on_mouse_down(MouseButton::Left, cx.listener(|_this, event: &MouseDownEvent, win, cx| {
-                        if event.click_count == 2 {
-                            crate::window_controls::toggle_maximize(win);
-                            cx.notify();
-                        } else {
-                            crate::window_controls::start_window_drag(win);
-                        }
-                    }))
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(|_this, event: &MouseDownEvent, win, cx| {
+                            if event.click_count == 2 {
+                                crate::window_controls::toggle_maximize(win);
+                                cx.notify();
+                            } else {
+                                crate::window_controls::start_window_drag(win);
+                            }
+                        }),
+                    )
                     .child(
                         div()
                             .text_xs()
@@ -1385,12 +1499,7 @@ impl Render for EditorView {
                             .text_color(theme.accent)
                             .child("bmvp"),
                     )
-                    .child(
-                        div()
-                            .text_xs()
-                            .text_color(theme.border)
-                            .child("/"),
-                    )
+                    .child(div().text_xs().text_color(theme.border).child("/"))
                     .child(
                         div()
                             .text_xs()
@@ -1405,14 +1514,17 @@ impl Render for EditorView {
                     .h_full()
                     .min_w(px(20.0))
                     .cursor_default()
-                    .on_mouse_down(MouseButton::Left, cx.listener(|_this, event: &MouseDownEvent, win, cx| {
-                        if event.click_count == 2 {
-                            crate::window_controls::toggle_maximize(win);
-                            cx.notify();
-                        } else {
-                            crate::window_controls::start_window_drag(win);
-                        }
-                    })),
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(|_this, event: &MouseDownEvent, win, cx| {
+                            if event.click_count == 2 {
+                                crate::window_controls::toggle_maximize(win);
+                                cx.notify();
+                            } else {
+                                crate::window_controls::start_window_drag(win);
+                            }
+                        }),
+                    ),
             )
             // 居中快速检索胶囊 (Zed 标志性 Command Palette)
             .child(search_pill)
@@ -1423,14 +1535,17 @@ impl Render for EditorView {
                     .h_full()
                     .min_w(px(20.0))
                     .cursor_default()
-                    .on_mouse_down(MouseButton::Left, cx.listener(|_this, event: &MouseDownEvent, win, cx| {
-                        if event.click_count == 2 {
-                            crate::window_controls::toggle_maximize(win);
-                            cx.notify();
-                        } else {
-                            crate::window_controls::start_window_drag(win);
-                        }
-                    })),
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(|_this, event: &MouseDownEvent, win, cx| {
+                            if event.click_count == 2 {
+                                crate::window_controls::toggle_maximize(win);
+                                cx.notify();
+                            } else {
+                                crate::window_controls::start_window_drag(win);
+                            }
+                        }),
+                    ),
             )
             // 右侧：工具项 + 分割线 + 窗口控制按钮 (最小化、最大化/还原、关闭)
             .child(
@@ -1439,13 +1554,7 @@ impl Render for EditorView {
                     .h_full()
                     .items_center()
                     .child(top_tools)
-                    .child(
-                        div()
-                            .w(px(1.0))
-                            .h(px(14.0))
-                            .bg(theme.border_subtle)
-                            .mx_2(),
-                    )
+                    .child(div().w(px(1.0)).h(px(14.0)).bg(theme.border_subtle).mx_2())
                     .child(window_controls),
             );
 
@@ -1459,35 +1568,32 @@ impl Render for EditorView {
             .items_center()
             .justify_between()
             .px_2()
+            .child(div().flex().items_center().gap_1().children(tab_elements))
             .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap_1()
-                    .children(tab_elements),
-            )
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap_1()
-                    .child(
-                        div()
-                            .w(px(24.0))
-                            .h(px(24.0))
-                            .rounded_xs()
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .cursor_pointer()
-                            .hover(|s| s.bg(theme.bg_hover).text_color(theme.text_primary))
-                            .text_color(if self.find_state.is_open { theme.accent } else { theme.text_muted })
-                            .text_xs()
-                            .child("⌕")
-                            .on_mouse_down(MouseButton::Left, cx.listener(|this, _, _win, cx| {
+                div().flex().items_center().gap_1().child(
+                    div()
+                        .w(px(24.0))
+                        .h(px(24.0))
+                        .rounded_xs()
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .cursor_pointer()
+                        .hover(|s| s.bg(theme.bg_hover).text_color(theme.text_primary))
+                        .text_color(if self.find_state.is_open {
+                            theme.accent
+                        } else {
+                            theme.text_muted
+                        })
+                        .text_xs()
+                        .child("⌕")
+                        .on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(|this, _, _win, cx| {
                                 this.open_find_bar(cx);
-                            })),
-                    ),
+                            }),
+                        ),
+                ),
             );
 
         // =========================================================================
@@ -1545,7 +1651,11 @@ impl Render for EditorView {
             for row_idx in start_line..end_line {
                 let is_cursor_line = row_idx == cursor_pos.row;
                 let line_num_str = format!("{}", row_idx + 1);
-                let gutter_col = if is_cursor_line { theme.text_primary } else { theme.text_muted };
+                let gutter_col = if is_cursor_line {
+                    theme.text_primary
+                } else {
+                    theme.text_muted
+                };
 
                 if show_line_numbers {
                     gutter_elements.push(
@@ -1557,21 +1667,35 @@ impl Render for EditorView {
                             .pr_3()
                             .text_color(gutter_col)
                             .cursor_pointer()
-                            .on_mouse_down(MouseButton::Left, cx.listener(move |this, _, _win, cx| {
-                                if let Some(buf) = this.current_buffer_mut() {
-                                    let target = buf.position_to_char(crate::buffer::Position { row: row_idx, col: 0 });
-                                    buf.set_cursor(target, false);
-                                    cx.notify();
-                                }
-                            }))
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(move |this, _, _win, cx| {
+                                    if let Some(buf) = this.current_buffer_mut() {
+                                        let target =
+                                            buf.position_to_char(crate::buffer::Position {
+                                                row: row_idx,
+                                                col: 0,
+                                            });
+                                        buf.set_cursor(target, false);
+                                        cx.notify();
+                                    }
+                                }),
+                            )
                             .child(line_num_str),
                     );
                 }
 
-                let line_content = buffer.line(row_idx).map(|s| s.to_string()).unwrap_or_default();
+                let line_content = buffer
+                    .line(row_idx)
+                    .map(|s| s.to_string())
+                    .unwrap_or_default();
                 let display_text = line_content.trim_end_matches(&['\r', '\n'][..]).to_string();
 
-                let line_bg = if is_cursor_line { theme.bg_active_line } else { theme.bg_editor };
+                let line_bg = if is_cursor_line {
+                    theme.bg_active_line
+                } else {
+                    theme.bg_editor
+                };
 
                 let mut line_box = div()
                     .h(line_height)
@@ -1581,23 +1705,26 @@ impl Render for EditorView {
                     .items_center()
                     .px_2()
                     .cursor_text()
-                    .on_mouse_down(MouseButton::Left, cx.listener(move |this, event: &MouseDownEvent, _win, cx| {
-                        if let Some(buf) = this.current_buffer_mut() {
-                            let click_x = f32::from(event.position.x);
-                            let col = if click_x > left_offset {
-                                ((click_x - left_offset) / char_w).round() as usize
-                            } else {
-                                0
-                            };
-                            let target = buf.position_to_char(crate::buffer::Position {
-                                row: row_idx,
-                                col,
-                            });
-                            buf.set_cursor(target, event.modifiers.shift);
-                            this.terminal_focused = false;
-                            cx.notify();
-                        }
-                    }));
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(move |this, event: &MouseDownEvent, _win, cx| {
+                            if let Some(buf) = this.current_buffer_mut() {
+                                let click_x = f32::from(event.position.x);
+                                let col = if click_x > left_offset {
+                                    ((click_x - left_offset) / char_w).round() as usize
+                                } else {
+                                    0
+                                };
+                                let target = buf.position_to_char(crate::buffer::Position {
+                                    row: row_idx,
+                                    col,
+                                });
+                                buf.set_cursor(target, event.modifiers.shift);
+                                this.terminal_focused = false;
+                                cx.notify();
+                            }
+                        }),
+                    );
 
                 let line_start_char = buffer.line_to_char(row_idx);
                 let text_chars: Vec<char> = display_text.chars().collect();
@@ -1739,7 +1866,9 @@ impl Render for EditorView {
                     };
                     if delta_y < 0 {
                         // 向上滚动
-                        this.scroll_top = this.scroll_top.saturating_add(delta_y.unsigned_abs() as usize);
+                        this.scroll_top = this
+                            .scroll_top
+                            .saturating_add(delta_y.unsigned_abs() as usize);
                     } else if delta_y > 0 {
                         // 向下滚动
                         this.scroll_top = this.scroll_top.saturating_sub(delta_y as usize);
@@ -1771,7 +1900,9 @@ impl Render for EditorView {
         // 6. 底部系统原生命令行 Dock (Native Windows Command Prompt Dock)
         // =========================================================================
         let bottom_terminal = if self.show_terminal && !self.terminals.is_empty() {
-            let active_idx = self.active_terminal.min(self.terminals.len().saturating_sub(1));
+            let active_idx = self
+                .active_terminal
+                .min(self.terminals.len().saturating_sub(1));
             let term = &self.terminals[active_idx];
             let term_font = "Consolas".to_string();
             let term_size = px(13.0);
@@ -1800,7 +1931,11 @@ impl Render for EditorView {
                         .text_color(rgb(0xcccccc)) // 经典系统命令行白灰色
                         .font_family(term_font.clone())
                         .text_size(term_size)
-                        .child(if line.is_empty() { " ".to_string() } else { line.clone() }),
+                        .child(if line.is_empty() {
+                            " ".to_string()
+                        } else {
+                            line.clone()
+                        }),
                 );
             }
 
@@ -1823,22 +1958,13 @@ impl Render for EditorView {
                                 .text_color(rgb(0xcccccc))
                                 .child(format!("{} ", prompt)),
                         )
-                        .child(
-                            div()
-                                .text_color(rgb(0xffffff))
-                                .child(before_text),
-                        )
-                        .child(
-                            div()
-                                .w(px(7.0))
-                                .h(px(13.0))
-                                .bg(if is_focused { rgb(0xcccccc) } else { rgb(0x555555) }),
-                        )
-                        .child(
-                            div()
-                                .text_color(rgb(0xffffff))
-                                .child(after_text),
-                        ),
+                        .child(div().text_color(rgb(0xffffff)).child(before_text))
+                        .child(div().w(px(7.0)).h(px(13.0)).bg(if is_focused {
+                            rgb(0xcccccc)
+                        } else {
+                            rgb(0x555555)
+                        }))
+                        .child(div().text_color(rgb(0xffffff)).child(after_text)),
                 );
             }
 
@@ -1847,7 +1973,13 @@ impl Render for EditorView {
             for (idx, t) in self.terminals.iter().enumerate() {
                 let is_cur = idx == active_idx;
                 let status_icon = if t.is_running { "● " } else { ">_ " };
-                let status_color = if t.is_running { rgb(0xfacc15) } else if is_cur { rgb(0xffffff) } else { rgb(0xa1a1aa) };
+                let status_color = if t.is_running {
+                    rgb(0xfacc15)
+                } else if is_cur {
+                    rgb(0xffffff)
+                } else {
+                    rgb(0xa1a1aa)
+                };
                 tab_divs.push(
                     div()
                         .h(px(22.0))
@@ -1878,15 +2010,21 @@ impl Render for EditorView {
                                 .justify_center()
                                 .hover(|s| s.bg(rgb(0x3f3f46)).text_color(theme.error))
                                 .child("×")
-                                .on_mouse_down(MouseButton::Left, cx.listener(move |this, _, _win, cx| {
-                                    this.close_terminal_tab(idx, cx);
-                                })),
+                                .on_mouse_down(
+                                    MouseButton::Left,
+                                    cx.listener(move |this, _, _win, cx| {
+                                        this.close_terminal_tab(idx, cx);
+                                    }),
+                                ),
                         )
-                        .on_mouse_down(MouseButton::Left, cx.listener(move |this, _, _win, cx| {
-                            this.active_terminal = idx;
-                            this.terminal_focused = true;
-                            cx.notify();
-                        })),
+                        .on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(move |this, _, _win, cx| {
+                                this.active_terminal = idx;
+                                this.terminal_focused = true;
+                                cx.notify();
+                            }),
+                        ),
                 );
             }
 
@@ -1897,10 +2035,13 @@ impl Render for EditorView {
                     .bg(rgb(0x0c0c0c)) // 纯正系统命令行黑色背景
                     .flex()
                     .flex_col()
-                    .on_mouse_down(MouseButton::Left, cx.listener(|this, _, _win, cx| {
-                        this.terminal_focused = true;
-                        cx.notify();
-                    }))
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(|this, _, _win, cx| {
+                            this.terminal_focused = true;
+                            cx.notify();
+                        }),
+                    )
                     .on_scroll_wheel(cx.listener(|this, event: &ScrollWheelEvent, _win, cx| {
                         let delta_y = match event.delta {
                             ScrollDelta::Pixels(p) => (p.y / px(20.0)) as i32,
@@ -1945,11 +2086,16 @@ impl Render for EditorView {
                                             .cursor_pointer()
                                             .text_xs()
                                             .text_color(rgb(0xa1a1aa))
-                                            .hover(|s| s.bg(rgb(0x27272a)).text_color(rgb(0xffffff)))
+                                            .hover(|s| {
+                                                s.bg(rgb(0x27272a)).text_color(rgb(0xffffff))
+                                            })
                                             .child("+")
-                                            .on_mouse_down(MouseButton::Left, cx.listener(|this, _, _win, cx| {
-                                                this.new_terminal_tab(cx);
-                                            })),
+                                            .on_mouse_down(
+                                                MouseButton::Left,
+                                                cx.listener(|this, _, _win, cx| {
+                                                    this.new_terminal_tab(cx);
+                                                }),
+                                            ),
                                     ),
                             )
                             // 右侧：状态指示、终止按钮、工作路径、重载Profile、独立系统终端、清屏、关闭
@@ -1958,50 +2104,49 @@ impl Render for EditorView {
                                     .flex()
                                     .items_center()
                                     .gap_1p5()
-                                    .child(
-                                        if self.terminals[active_idx].is_running {
-                                            div()
-                                                .px_1p5()
-                                                .py_0p5()
-                                                .rounded_xs()
-                                                .bg(rgb(0x854d0e))
-                                                .text_xs()
-                                                .text_color(rgb(0xfef08a))
-                                                .child("● running")
-                                        } else {
-                                            div()
-                                                .px_1p5()
-                                                .py_0p5()
-                                                .rounded_xs()
-                                                .bg(rgb(0x27272a))
-                                                .text_xs()
-                                                .text_color(rgb(0x4ade80))
-                                                .child("● ready")
-                                        }
-                                    )
-                                    .child(
-                                        if self.terminals[active_idx].is_running {
-                                            div()
-                                                .h(px(20.0))
-                                                .px_2()
-                                                .rounded_xs()
-                                                .bg(rgb(0xef4444))
-                                                .text_color(rgb(0xffffff))
-                                                .text_xs()
-                                                .flex()
-                                                .items_center()
-                                                .cursor_pointer()
-                                                .child("■ 终止")
-                                                .on_mouse_down(MouseButton::Left, cx.listener(|this, _, _win, cx| {
+                                    .child(if self.terminals[active_idx].is_running {
+                                        div()
+                                            .px_1p5()
+                                            .py_0p5()
+                                            .rounded_xs()
+                                            .bg(rgb(0x854d0e))
+                                            .text_xs()
+                                            .text_color(rgb(0xfef08a))
+                                            .child("● running")
+                                    } else {
+                                        div()
+                                            .px_1p5()
+                                            .py_0p5()
+                                            .rounded_xs()
+                                            .bg(rgb(0x27272a))
+                                            .text_xs()
+                                            .text_color(rgb(0x4ade80))
+                                            .child("● ready")
+                                    })
+                                    .child(if self.terminals[active_idx].is_running {
+                                        div()
+                                            .h(px(20.0))
+                                            .px_2()
+                                            .rounded_xs()
+                                            .bg(rgb(0xef4444))
+                                            .text_color(rgb(0xffffff))
+                                            .text_xs()
+                                            .flex()
+                                            .items_center()
+                                            .cursor_pointer()
+                                            .child("■ 终止")
+                                            .on_mouse_down(
+                                                MouseButton::Left,
+                                                cx.listener(|this, _, _win, cx| {
                                                     if let Some(t) = this.current_terminal_mut() {
                                                         t.interrupt();
                                                     }
                                                     cx.notify();
-                                                }))
-                                        } else {
-                                            div()
-                                        }
-                                    )
+                                                }),
+                                            )
+                                    } else {
+                                        div()
+                                    })
                                     .child(
                                         div()
                                             .px_1p5()
@@ -2015,33 +2160,39 @@ impl Render for EditorView {
                                                     .current_dir
                                                     .file_name()
                                                     .map(|s| s.to_string_lossy().to_string())
-                                                    .unwrap_or_else(|| self.terminals[active_idx].current_dir.display().to_string());
+                                                    .unwrap_or_else(|| {
+                                                        self.terminals[active_idx]
+                                                            .current_dir
+                                                            .display()
+                                                            .to_string()
+                                                    });
                                                 format!("~ / {}", dir_name)
                                             }),
                                     )
-                                    .child(
-                                        if self.terminals[active_idx].scroll_offset > 0 {
-                                            div()
-                                                .h(px(20.0))
-                                                .px_2()
-                                                .rounded_xs()
-                                                .bg(theme.accent)
-                                                .text_color(rgb(0xffffff))
-                                                .text_xs()
-                                                .flex()
-                                                .items_center()
-                                                .cursor_pointer()
-                                                .child("↓ Latest")
-                                                .on_mouse_down(MouseButton::Left, cx.listener(|this, _, _win, cx| {
+                                    .child(if self.terminals[active_idx].scroll_offset > 0 {
+                                        div()
+                                            .h(px(20.0))
+                                            .px_2()
+                                            .rounded_xs()
+                                            .bg(theme.accent)
+                                            .text_color(rgb(0xffffff))
+                                            .text_xs()
+                                            .flex()
+                                            .items_center()
+                                            .cursor_pointer()
+                                            .child("↓ Latest")
+                                            .on_mouse_down(
+                                                MouseButton::Left,
+                                                cx.listener(|this, _, _win, cx| {
                                                     if let Some(t) = this.current_terminal_mut() {
                                                         t.scroll_to_bottom();
                                                     }
                                                     cx.notify();
-                                                }))
-                                        } else {
-                                            div()
-                                        }
-                                    )
+                                                }),
+                                            )
+                                    } else {
+                                        div()
+                                    })
                                     .child(
                                         div()
                                             .h(px(20.0))
@@ -2050,12 +2201,17 @@ impl Render for EditorView {
                                             .cursor_pointer()
                                             .text_xs()
                                             .text_color(rgb(0xa1a1aa))
-                                            .hover(|s| s.bg(rgb(0x27272a)).text_color(rgb(0xffffff)))
+                                            .hover(|s| {
+                                                s.bg(rgb(0x27272a)).text_color(rgb(0xffffff))
+                                            })
                                             .child("⟳ 重载")
-                                            .on_mouse_down(MouseButton::Left, cx.listener(|this, _, _win, cx| {
-                                                this.restart_terminal();
-                                                cx.notify();
-                                            })),
+                                            .on_mouse_down(
+                                                MouseButton::Left,
+                                                cx.listener(|this, _, _win, cx| {
+                                                    this.restart_terminal();
+                                                    cx.notify();
+                                                }),
+                                            ),
                                     )
                                     .child(
                                         div()
@@ -2065,13 +2221,18 @@ impl Render for EditorView {
                                             .cursor_pointer()
                                             .text_xs()
                                             .text_color(rgb(0xa1a1aa))
-                                            .hover(|s| s.bg(rgb(0x27272a)).text_color(rgb(0xffffff)))
+                                            .hover(|s| {
+                                                s.bg(rgb(0x27272a)).text_color(rgb(0xffffff))
+                                            })
                                             .child("↗ 外部终端")
-                                            .on_mouse_down(MouseButton::Left, cx.listener(|this, _, _win, _cx| {
-                                                if let Some(t) = this.current_terminal() {
-                                                    t.open_external();
-                                                }
-                                            })),
+                                            .on_mouse_down(
+                                                MouseButton::Left,
+                                                cx.listener(|this, _, _win, _cx| {
+                                                    if let Some(t) = this.current_terminal() {
+                                                        t.open_external();
+                                                    }
+                                                }),
+                                            ),
                                     )
                                     .child(
                                         div()
@@ -2081,14 +2242,19 @@ impl Render for EditorView {
                                             .cursor_pointer()
                                             .text_xs()
                                             .text_color(rgb(0xa1a1aa))
-                                            .hover(|s| s.bg(rgb(0x27272a)).text_color(rgb(0xffffff)))
+                                            .hover(|s| {
+                                                s.bg(rgb(0x27272a)).text_color(rgb(0xffffff))
+                                            })
                                             .child("⌫ 清屏")
-                                            .on_mouse_down(MouseButton::Left, cx.listener(|this, _, _win, cx| {
-                                                if let Some(t) = this.current_terminal_mut() {
-                                                    t.clear();
-                                                }
-                                                cx.notify();
-                                            })),
+                                            .on_mouse_down(
+                                                MouseButton::Left,
+                                                cx.listener(|this, _, _win, cx| {
+                                                    if let Some(t) = this.current_terminal_mut() {
+                                                        t.clear();
+                                                    }
+                                                    cx.notify();
+                                                }),
+                                            ),
                                     )
                                     .child(
                                         div()
@@ -2103,9 +2269,12 @@ impl Render for EditorView {
                                             .text_color(rgb(0xa1a1aa))
                                             .hover(|s| s.bg(rgb(0x27272a)).text_color(theme.error))
                                             .child("✕")
-                                            .on_mouse_down(MouseButton::Left, cx.listener(|this, _, _win, cx| {
-                                                this.close_terminal_dock(cx);
-                                            })),
+                                            .on_mouse_down(
+                                                MouseButton::Left,
+                                                cx.listener(|this, _, _win, cx| {
+                                                    this.close_terminal_dock(cx);
+                                                }),
+                                            ),
                                     ),
                             ),
                     )
@@ -2132,18 +2301,25 @@ impl Render for EditorView {
                     .h(px(4.0))
                     .w_full()
                     .cursor_row_resize()
-                    .bg(if is_resizing || is_focused { theme.accent } else { theme.border_subtle })
+                    .bg(if is_resizing || is_focused {
+                        theme.accent
+                    } else {
+                        theme.border_subtle
+                    })
                     .hover(|s| s.bg(theme.accent))
-                    .on_mouse_down(MouseButton::Left, cx.listener(|this, event: &MouseDownEvent, _win, cx| {
-                        if event.click_count == 2 {
-                            this.terminal_height = 240.0;
-                            this.resizing_terminal = false;
-                            this.save_config();
-                        } else {
-                            this.resizing_terminal = true;
-                        }
-                        cx.notify();
-                    })),
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(|this, event: &MouseDownEvent, _win, cx| {
+                            if event.click_count == 2 {
+                                this.terminal_height = 240.0;
+                                this.resizing_terminal = false;
+                                this.save_config();
+                            } else {
+                                this.resizing_terminal = true;
+                            }
+                            cx.notify();
+                        }),
+                    ),
             )
         } else {
             None

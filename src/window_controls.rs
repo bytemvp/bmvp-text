@@ -3,7 +3,7 @@ use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 
 #[cfg(target_os = "windows")]
 #[repr(C)]
-struct POINT {
+struct Point {
     x: i32,
     y: i32,
 }
@@ -14,7 +14,7 @@ unsafe extern "system" {
     fn SendMessageW(hwnd: isize, msg: u32, wparam: usize, lparam: isize) -> isize;
     fn ShowWindowAsync(hwnd: isize, cmd: i32) -> i32;
     fn IsZoomed(hwnd: isize) -> i32;
-    fn GetCursorPos(lp_point: *mut POINT) -> i32;
+    fn GetCursorPos(lp_point: *mut Point) -> i32;
 }
 
 #[cfg(target_os = "windows")]
@@ -25,10 +25,10 @@ const SW_MAXIMIZE: i32 = 3;
 const SW_MINIMIZE: i32 = 6;
 
 pub fn get_window_hwnd(window: &Window) -> Option<isize> {
-    if let Ok(handle) = HasWindowHandle::window_handle(window) {
-        if let RawWindowHandle::Win32(win32) = handle.as_raw() {
-            return Some(win32.hwnd.get());
-        }
+    if let Ok(handle) = HasWindowHandle::window_handle(window)
+        && let RawWindowHandle::Win32(win32) = handle.as_raw()
+    {
+        return Some(win32.hwnd.get());
     }
     None
 }
@@ -73,7 +73,7 @@ pub fn start_window_drag(window: &Window) {
     if let Some(hwnd) = get_window_hwnd(window) {
         unsafe {
             ReleaseCapture();
-            let mut pt = POINT { x: 0, y: 0 };
+            let mut pt = Point { x: 0, y: 0 };
             GetCursorPos(&mut pt);
             let lparam = ((pt.y as isize) << 16) | ((pt.x as isize) & 0xFFFF);
             // WM_NCLBUTTONDOWN = 0x00A1, HTCAPTION = 2

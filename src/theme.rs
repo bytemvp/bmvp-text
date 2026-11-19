@@ -46,13 +46,13 @@ pub struct Theme {
     pub bg_modal: Hsla,        // 弹窗背景 #1c1c22
 
     // 边框与分割线
-    pub border: Hsla,          // 分割线 #282832
-    pub border_subtle: Hsla,   // 弱分割线 #1f1f26
+    pub border: Hsla,        // 分割线 #282832
+    pub border_subtle: Hsla, // 弱分割线 #1f1f26
 
     // 文字颜色
-    pub text_primary: Hsla,    // 主文字白 #f4f4f5
-    pub text_secondary: Hsla,  // 次级灰 #9ca3af
-    pub text_muted: Hsla,      // 静音灰 #52525b
+    pub text_primary: Hsla,   // 主文字白 #f4f4f5
+    pub text_secondary: Hsla, // 次级灰 #9ca3af
+    pub text_muted: Hsla,     // 静音灰 #52525b
 
     // 状态与标识
     pub accent: Hsla,          // 品牌主色 (Zed Sky Blue #38bdf8)

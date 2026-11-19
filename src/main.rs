@@ -2,17 +2,17 @@ mod buffer;
 mod editor;
 mod file_finder;
 mod find_replace;
-mod system_terminal;
 mod settings;
 mod settings_modal;
 mod sidebar;
 mod status_bar;
 mod syntax;
+mod system_terminal;
 mod theme;
 mod window_controls;
 
-use gpui::*;
 use editor::EditorView;
+use gpui::*;
 
 fn main() {
     let app = Application::new();

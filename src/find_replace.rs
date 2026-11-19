@@ -1,6 +1,6 @@
+use crate::theme::Theme;
 use gpui::*;
 use std::ops::Range;
-use crate::theme::Theme;
 
 pub struct FindState {
     pub is_open: bool,
@@ -78,11 +78,7 @@ impl FindState {
             .gap_1p5()
             .px_2()
             .text_xs()
-            .child(
-                div()
-                    .text_color(theme.accent)
-                    .child("⌕"),
-            )
+            .child(div().text_color(theme.accent).child("⌕"))
             .child(
                 div()
                     .w(px(190.0))
@@ -95,12 +91,23 @@ impl FindState {
                     .flex()
                     .items_center()
                     .cursor_text()
-                    .text_color(if self.query.is_empty() { theme.text_muted } else { theme.text_primary })
-                    .child(if self.query.is_empty() { "Find in file...".to_string() } else { self.query.clone() })
-                    .on_mouse_down(MouseButton::Left, cx.listener(|this, _, _win, cx| {
-                        this.find_focused = true;
-                        cx.notify();
-                    })),
+                    .text_color(if self.query.is_empty() {
+                        theme.text_muted
+                    } else {
+                        theme.text_primary
+                    })
+                    .child(if self.query.is_empty() {
+                        "Find in file...".to_string()
+                    } else {
+                        self.query.clone()
+                    })
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(|this, _, _win, cx| {
+                            this.find_focused = true;
+                            cx.notify();
+                        }),
+                    ),
             )
             .child(
                 div()
@@ -125,9 +132,12 @@ impl FindState {
                     .hover(|s| s.bg(theme.bg_hover).text_color(theme.text_primary))
                     .text_color(theme.text_muted)
                     .child("↑")
-                    .on_mouse_down(MouseButton::Left, cx.listener(|this, _, _win, cx| {
-                        this.prev_find_match(cx);
-                    })),
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(|this, _, _win, cx| {
+                            this.prev_find_match(cx);
+                        }),
+                    ),
             )
             // 下一个
             .child(
@@ -142,9 +152,12 @@ impl FindState {
                     .hover(|s| s.bg(theme.bg_hover).text_color(theme.text_primary))
                     .text_color(theme.text_muted)
                     .child("↓")
-                    .on_mouse_down(MouseButton::Left, cx.listener(|this, _, _win, cx| {
-                        this.next_find_match(cx);
-                    })),
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(|this, _, _win, cx| {
+                            this.next_find_match(cx);
+                        }),
+                    ),
             )
             // 关闭
             .child(
@@ -159,10 +172,13 @@ impl FindState {
                     .hover(|s| s.bg(theme.bg_hover).text_color(theme.error))
                     .text_color(theme.text_muted)
                     .child("✕")
-                    .on_mouse_down(MouseButton::Left, cx.listener(|this, _, _win, cx| {
-                        this.find_state.close();
-                        cx.notify();
-                    })),
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(|this, _, _win, cx| {
+                            this.find_state.close();
+                            cx.notify();
+                        }),
+                    ),
             )
     }
 }

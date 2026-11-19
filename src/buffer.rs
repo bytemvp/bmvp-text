@@ -473,12 +473,12 @@ impl TextBuffer {
     }
 
     pub fn line_ending(&self) -> &'static str {
-        if self.rope.len_lines() > 0 {
-            if let Some(first_line) = self.line(0) {
-                let s = first_line.to_string();
-                if s.ends_with("\r\n") {
-                    return "CRLF";
-                }
+        if self.rope.len_lines() > 0
+            && let Some(first_line) = self.line(0)
+        {
+            let s = first_line.to_string();
+            if s.ends_with("\r\n") {
+                return "CRLF";
             }
         }
         "LF"

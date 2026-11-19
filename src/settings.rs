@@ -1,6 +1,6 @@
+use crate::theme::ThemeMode;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
-use crate::theme::ThemeMode;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct EditorSettings {
@@ -58,9 +58,8 @@ impl EditorSettings {
         "Courier New",
     ];
 
-    pub const AVAILABLE_FONT_SIZES: &'static [f32] = &[
-        11.0, 12.0, 13.0, 14.0, 15.0, 16.0, 18.0, 20.0,
-    ];
+    pub const AVAILABLE_FONT_SIZES: &'static [f32] =
+        &[11.0, 12.0, 13.0, 14.0, 15.0, 16.0, 18.0, 20.0];
 
     pub const AVAILABLE_TAB_SIZES: &'static [usize] = &[2, 4, 8];
 
@@ -104,12 +103,11 @@ impl AppConfig {
 
     pub fn load() -> Self {
         let path = Self::config_path();
-        if path.exists() {
-            if let Ok(content) = std::fs::read_to_string(&path) {
-                if let Ok(config) = serde_json::from_str::<Self>(&content) {
-                    return config;
-                }
-            }
+        if path.exists()
+            && let Ok(content) = std::fs::read_to_string(&path)
+            && let Ok(config) = serde_json::from_str::<Self>(&content)
+        {
+            return config;
         }
         Self::default()
     }

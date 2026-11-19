@@ -2,7 +2,7 @@
 use std::os::windows::process::CommandExt;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
-use std::sync::mpsc::{channel, Receiver};
+use std::sync::mpsc::{Receiver, channel};
 use std::sync::{Arc, Mutex};
 use std::thread;
 
@@ -29,9 +29,8 @@ pub fn decode_oem(bytes: &[u8]) -> String {
     #[cfg(target_os = "windows")]
     {
         let len = bytes.len() as i32;
-        let wide_len = unsafe {
-            MultiByteToWideChar(1, 0, bytes.as_ptr(), len, std::ptr::null_mut(), 0)
-        };
+        let wide_len =
+            unsafe { MultiByteToWideChar(1, 0, bytes.as_ptr(), len, std::ptr::null_mut(), 0) };
         if wide_len > 0 {
             let mut wide_buf = vec![0u16; wide_len as usize];
             unsafe {
@@ -47,7 +46,7 @@ pub fn get_system_cmd_banner() -> Vec<String> {
     #[cfg(target_os = "windows")]
     {
         let ver_res = Command::new("cmd.exe")
-            .args(&["/c", "ver"])
+            .args(["/c", "ver"])
             .creation_flags(CREATE_NO_WINDOW)
             .output();
 
@@ -70,10 +69,7 @@ pub fn get_system_cmd_banner() -> Vec<String> {
     }
     #[cfg(not(target_os = "windows"))]
     {
-        vec![
-            "Terminal Session Initialized".to_string(),
-            String::new(),
-        ]
+        vec!["Terminal Session Initialized".to_string(), String::new()]
     }
 }
 
@@ -113,10 +109,10 @@ impl SystemTerminal {
 
     pub fn reload_profile(&mut self, default_dir: Option<PathBuf>) {
         self.interrupt();
-        if let Some(dir) = default_dir {
-            if dir.is_dir() {
-                self.current_dir = dir;
-            }
+        if let Some(dir) = default_dir
+            && dir.is_dir()
+        {
+            self.current_dir = dir;
         }
         self.output_lines = get_system_cmd_banner();
         self.input_buffer.clear();
@@ -194,7 +190,8 @@ impl SystemTerminal {
         // 2. 内置 cd 路径跳转命令 (瞬时执行，同步更新当前路径)
         if first == "cd" || first == "chdir" {
             if parts.len() == 1 {
-                self.output_lines.push(self.current_dir.display().to_string());
+                self.output_lines
+                    .push(self.current_dir.display().to_string());
                 self.output_lines.push(String::new());
                 return;
             }
@@ -202,7 +199,7 @@ impl SystemTerminal {
             #[cfg(target_os = "windows")]
             {
                 let res = Command::new("cmd.exe")
-                    .args(&["/c", &format!("cd /d \"{}\" && cd", target)])
+                    .args(["/c", &format!("cd /d \"{}\" && cd", target)])
                     .current_dir(&self.current_dir)
                     .creation_flags(CREATE_NO_WINDOW)
                     .output();
@@ -236,7 +233,8 @@ impl SystemTerminal {
                 if resolved.is_dir() {
                     self.current_dir = resolved;
                 } else {
-                    self.output_lines.push("No such file or directory".to_string());
+                    self.output_lines
+                        .push("No such file or directory".to_string());
                 }
             }
             self.output_lines.push(String::new());
@@ -267,14 +265,14 @@ impl SystemTerminal {
             #[cfg(target_os = "windows")]
             let mut cmd = Command::new("cmd.exe");
             #[cfg(target_os = "windows")]
-            cmd.args(&["/c", &cmd_str]);
+            cmd.args(["/c", &cmd_str]);
             #[cfg(target_os = "windows")]
             cmd.creation_flags(CREATE_NO_WINDOW);
 
             #[cfg(not(target_os = "windows"))]
             let mut cmd = Command::new("sh");
             #[cfg(not(target_os = "windows"))]
-            cmd.args(&["-c", &cmd_str]);
+            cmd.args(["-c", &cmd_str]);
 
             cmd.current_dir(&dir);
             cmd.stdout(Stdio::piped());
@@ -295,12 +293,10 @@ impl SystemTerminal {
                         if let Some(stdout) = stdout {
                             use std::io::{BufRead, BufReader};
                             let reader = BufReader::new(stdout);
-                            for line in reader.split(b'\n') {
-                                if let Ok(line_bytes) = line {
-                                    let s = decode_oem(&line_bytes);
-                                    let trimmed_line = s.trim_end_matches('\r').to_string();
-                                    let _ = tx_out.send(trimmed_line);
-                                }
+                            for line_bytes in reader.split(b'\n').map_while(Result::ok) {
+                                let s = decode_oem(&line_bytes);
+                                let trimmed_line = s.trim_end_matches('\r').to_string();
+                                let _ = tx_out.send(trimmed_line);
                             }
                         }
                     });
@@ -310,12 +306,10 @@ impl SystemTerminal {
                         if let Some(stderr) = stderr {
                             use std::io::{BufRead, BufReader};
                             let reader = BufReader::new(stderr);
-                            for line in reader.split(b'\n') {
-                                if let Ok(line_bytes) = line {
-                                    let s = decode_oem(&line_bytes);
-                                    let trimmed_line = s.trim_end_matches('\r').to_string();
-                                    let _ = tx_err.send(trimmed_line);
-                                }
+                            for line_bytes in reader.split(b'\n').map_while(Result::ok) {
+                                let s = decode_oem(&line_bytes);
+                                let trimmed_line = s.trim_end_matches('\r').to_string();
+                                let _ = tx_err.send(trimmed_line);
                             }
                         }
                     });
@@ -365,21 +359,19 @@ impl SystemTerminal {
     }
 
     pub fn interrupt(&mut self) {
-        if let Ok(mut lock) = self.running_child_pid.lock() {
-            if let Some(pid) = lock.take() {
-                #[cfg(target_os = "windows")]
-                {
-                    let _ = Command::new("taskkill")
-                        .args(&["/F", "/T", "/PID", &pid.to_string()])
-                        .creation_flags(CREATE_NO_WINDOW)
-                        .output();
-                }
-                #[cfg(not(target_os = "windows"))]
-                {
-                    let _ = Command::new("kill")
-                        .args(&["-9", &pid.to_string()])
-                        .output();
-                }
+        if let Ok(mut lock) = self.running_child_pid.lock()
+            && let Some(pid) = lock.take()
+        {
+            #[cfg(target_os = "windows")]
+            {
+                let _ = Command::new("taskkill")
+                    .args(["/F", "/T", "/PID", &pid.to_string()])
+                    .creation_flags(CREATE_NO_WINDOW)
+                    .output();
+            }
+            #[cfg(not(target_os = "windows"))]
+            {
+                let _ = Command::new("kill").args(["-9", &pid.to_string()]).output();
             }
         }
         self.is_running = false;
@@ -388,7 +380,8 @@ impl SystemTerminal {
         let input = self.input_buffer.clone();
         self.input_buffer.clear();
         self.cursor_pos = 0;
-        self.output_lines.push(format!("{} {}{}", prompt, input, "^C"));
+        self.output_lines
+            .push(format!("{} {}{}", prompt, input, "^C"));
         self.output_lines.push(String::new());
         self.scroll_offset = 0;
     }
@@ -516,14 +509,11 @@ impl SystemTerminal {
         #[cfg(target_os = "windows")]
         {
             // 优先启动 Windows Terminal，若系统未安装则直接打开原生 cmd.exe
-            let wt = Command::new("wt.exe")
-                .arg("-d")
-                .arg(&dir)
-                .spawn();
+            let wt = Command::new("wt.exe").arg("-d").arg(&dir).spawn();
 
             if wt.is_err() {
                 let _ = Command::new("cmd.exe")
-                    .args(&["/c", "start", "cmd.exe", "/k"])
+                    .args(["/c", "start", "cmd.exe", "/k"])
                     .current_dir(&dir)
                     .spawn();
             }

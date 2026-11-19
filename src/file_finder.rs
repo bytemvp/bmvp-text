@@ -1,8 +1,8 @@
+use crate::sidebar::Sidebar;
+use crate::theme::Theme;
 use gpui::*;
 use std::path::{Path, PathBuf};
 use walkdir::WalkDir;
-use crate::sidebar::Sidebar;
-use crate::theme::Theme;
 
 pub struct FileFinder {
     pub is_open: bool,
@@ -139,7 +139,11 @@ impl FileFinder {
                 .unwrap_or_else(|| rel.clone());
             let icon = Sidebar::file_icon(false, false, &file_name);
 
-            let bg = if is_selected { theme.bg_hover } else { theme.bg_modal };
+            let bg = if is_selected {
+                theme.bg_hover
+            } else {
+                theme.bg_modal
+            };
             let path_clone = path.clone();
 
             list_elements.push(
@@ -154,11 +158,14 @@ impl FileFinder {
                     .cursor_pointer()
                     .bg(bg)
                     .hover(|s| s.bg(theme.bg_hover))
-                    .on_mouse_down(MouseButton::Left, cx.listener(move |this, _, _win, cx| {
-                        this.open_file_path(&path_clone, cx);
-                        this.file_finder.close();
-                        cx.notify();
-                    }))
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(move |this, _, _win, cx| {
+                            this.open_file_path(&path_clone, cx);
+                            this.file_finder.close();
+                            cx.notify();
+                        }),
+                    )
                     .child(
                         div()
                             .flex()
@@ -175,8 +182,16 @@ impl FileFinder {
                             .child(
                                 div()
                                     .text_xs()
-                                    .font_weight(if is_selected { FontWeight::BOLD } else { FontWeight::NORMAL })
-                                    .text_color(if is_selected { theme.accent } else { theme.text_primary })
+                                    .font_weight(if is_selected {
+                                        FontWeight::BOLD
+                                    } else {
+                                        FontWeight::NORMAL
+                                    })
+                                    .text_color(if is_selected {
+                                        theme.accent
+                                    } else {
+                                        theme.text_primary
+                                    })
                                     .child(file_name),
                             ),
                     )
@@ -211,10 +226,13 @@ impl FileFinder {
             .items_start()
             .justify_center()
             .pt(px(60.0))
-            .on_mouse_down(MouseButton::Left, cx.listener(|this, _, _win, cx| {
-                this.file_finder.close();
-                cx.notify();
-            }))
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|this, _, _win, cx| {
+                    this.file_finder.close();
+                    cx.notify();
+                }),
+            )
             .child(
                 div()
                     .w(px(580.0))
@@ -238,17 +256,16 @@ impl FileFinder {
                             .flex()
                             .items_center()
                             .gap_2()
-                            .child(
-                                div()
-                                    .text_color(theme.accent)
-                                    .text_sm()
-                                    .child("⌕"),
-                            )
+                            .child(div().text_color(theme.accent).text_sm().child("⌕"))
                             .child(
                                 div()
                                     .flex_1()
                                     .text_sm()
-                                    .text_color(if self.query.is_empty() { theme.text_muted } else { theme.text_primary })
+                                    .text_color(if self.query.is_empty() {
+                                        theme.text_muted
+                                    } else {
+                                        theme.text_primary
+                                    })
                                     .child(if self.query.is_empty() {
                                         "Search files by name (type to filter)...".to_string()
                                     } else {

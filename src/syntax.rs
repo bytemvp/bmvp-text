@@ -1,5 +1,5 @@
-use gpui::*;
 use crate::theme::Theme;
+use gpui::*;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TokenType {
@@ -19,17 +19,47 @@ pub struct SyntaxToken {
 }
 
 const RUST_KEYWORDS: &[&str] = &[
-    "as", "async", "await", "break", "const", "continue", "crate", "dyn", "else", "enum",
-    "extern", "false", "fn", "for", "if", "impl", "in", "let", "loop", "match", "mod",
-    "move", "mut", "pub", "ref", "return", "self", "Self", "static", "struct", "super",
-    "trait", "true", "type", "unsafe", "use", "where", "while",
+    "as", "async", "await", "break", "const", "continue", "crate", "dyn", "else", "enum", "extern",
+    "false", "fn", "for", "if", "impl", "in", "let", "loop", "match", "mod", "move", "mut", "pub",
+    "ref", "return", "self", "Self", "static", "struct", "super", "trait", "true", "type",
+    "unsafe", "use", "where", "while",
 ];
 
 const GENERAL_KEYWORDS: &[&str] = &[
-    "function", "class", "var", "let", "const", "def", "import", "from", "export",
-    "default", "if", "else", "for", "while", "return", "null", "true", "false", "this",
-    "new", "try", "catch", "throw", "switch", "case", "break", "continue", "typeof",
-    "package", "public", "private", "protected", "static", "interface",
+    "function",
+    "class",
+    "var",
+    "let",
+    "const",
+    "def",
+    "import",
+    "from",
+    "export",
+    "default",
+    "if",
+    "else",
+    "for",
+    "while",
+    "return",
+    "null",
+    "true",
+    "false",
+    "this",
+    "new",
+    "try",
+    "catch",
+    "throw",
+    "switch",
+    "case",
+    "break",
+    "continue",
+    "typeof",
+    "package",
+    "public",
+    "private",
+    "protected",
+    "static",
+    "interface",
 ];
 
 pub fn highlight_line(line: &str, lang: &str) -> Vec<SyntaxToken> {
@@ -84,7 +114,9 @@ pub fn highlight_line(line: &str, lang: &str) -> Vec<SyntaxToken> {
         if ch.is_ascii_digit() {
             let mut num_str = String::new();
             let mut has_dot = false;
-            while idx < len && (chars[idx].is_ascii_alphanumeric() || (chars[idx] == '.' && !has_dot)) {
+            while idx < len
+                && (chars[idx].is_ascii_alphanumeric() || (chars[idx] == '.' && !has_dot))
+            {
                 if chars[idx] == '.' {
                     has_dot = true;
                 }
@@ -150,7 +182,12 @@ pub fn highlight_line(line: &str, lang: &str) -> Vec<SyntaxToken> {
         let mut def_str = String::new();
         while idx < len {
             let c = chars[idx];
-            if c.is_alphanumeric() || c == '_' || c == '"' || c == '\'' || c == '/' || c == '#'
+            if c.is_alphanumeric()
+                || c == '_'
+                || c == '"'
+                || c == '\''
+                || c == '/'
+                || c == '#'
                 || "+-*/%=<>!&|^~?:;.,()[]{}".contains(c)
             {
                 break;
@@ -171,13 +208,13 @@ pub fn highlight_line(line: &str, lang: &str) -> Vec<SyntaxToken> {
 
 pub fn token_color(token_type: TokenType, theme: &Theme) -> Hsla {
     match token_type {
-        TokenType::Keyword => rgb(0xec7279).into(),       // Zed keyword pink/red
-        TokenType::Type => rgb(0xe5c07b).into(),          // Warm gold
-        TokenType::Function => rgb(0x61afef).into(),      // Soft blue
+        TokenType::Keyword => rgb(0xec7279).into(), // Zed keyword pink/red
+        TokenType::Type => rgb(0xe5c07b).into(),    // Warm gold
+        TokenType::Function => rgb(0x61afef).into(), // Soft blue
         TokenType::StringLiteral => rgb(0x98c379).into(), // Leaf green
         TokenType::NumberLiteral => rgb(0xd19a66).into(), // Warm orange
-        TokenType::Comment => theme.text_muted,           // Dimmed gray
-        TokenType::Operator => theme.text_secondary,      // Muted light gray
-        TokenType::Default => theme.text_primary,         // Default primary text
+        TokenType::Comment => theme.text_muted,     // Dimmed gray
+        TokenType::Operator => theme.text_secondary, // Muted light gray
+        TokenType::Default => theme.text_primary,   // Default primary text
     }
 }
