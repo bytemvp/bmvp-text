@@ -1,4 +1,5 @@
 use gpui::Window;
+#[cfg(target_os = "windows")]
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 
 #[cfg(target_os = "windows")]
@@ -24,6 +25,7 @@ const SW_MAXIMIZE: i32 = 3;
 #[cfg(target_os = "windows")]
 const SW_MINIMIZE: i32 = 6;
 
+#[cfg(target_os = "windows")]
 pub fn get_window_hwnd(window: &Window) -> Option<isize> {
     if let Ok(handle) = HasWindowHandle::window_handle(window)
         && let RawWindowHandle::Win32(win32) = handle.as_raw()
