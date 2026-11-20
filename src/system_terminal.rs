@@ -567,25 +567,20 @@ impl SystemTerminal {
             PathBuf::from(".")
         };
 
-        let mut cmd = match self.shell {
+        let mut cmd = Command::new(self.shell.executable());
+        match self.shell {
             ShellKind::Pwsh | ShellKind::PowerShell => {
                 // 直接使用系统/用户自带的 pwsh 配置，不传入 -NoProfile 或新建 profile
-                let mut c = Command::new(self.shell.executable());
-                c.args(["-NoExit", "-Command", "-"]);
-                c
+                cmd.args(["-NoExit", "-Command", "-"]);
             }
             ShellKind::Cmd => {
-                let mut c = Command::new(self.shell.executable());
                 #[cfg(target_os = "windows")]
-                c.args(["/Q", "/K"]);
-                c
+                cmd.args(["/Q", "/K"]);
             }
             ShellKind::Bash => {
-                let mut c = Command::new(self.shell.executable());
-                c.arg("-s");
-                c
+                cmd.arg("-s");
             }
-        };
+        }
 
         #[cfg(target_os = "windows")]
         cmd.creation_flags(CREATE_NO_WINDOW);
