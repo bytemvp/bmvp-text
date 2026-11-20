@@ -39,7 +39,7 @@ impl Default for EditorSettings {
             tab_size: 4,
             show_line_numbers: true,
 
-            terminal_shell: "cmd".to_string(),
+            terminal_shell: "pwsh".to_string(),
             terminal_font_family: "Consolas".to_string(),
             terminal_font_size: 13.0,
 
@@ -80,7 +80,7 @@ pub struct AppConfig {
 impl Default for AppConfig {
     fn default() -> Self {
         Self {
-            theme_mode: ThemeMode::ZedDark,
+            theme_mode: ThemeMode::ZedLight,
             editor: EditorSettings::default(),
         }
     }

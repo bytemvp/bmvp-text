@@ -101,7 +101,9 @@
 - **执行内容**：`cargo check`、`cargo test`、`cargo clippy`、`cargo fmt`。
 
 ### 2. 持续交付与版本发布（CD: `.github/workflows/release.yml`）
-- **触发条件**：创建并推送版本 Tag（如 `git tag v0.1.0 && git push origin v0.1.0`）。
+- **触发条件**：
+  - **正式版**：创建并推送版本 Tag（如 `git tag v0.1.0 && git push origin v0.1.0`）。
+  - **自动滚动测试版**：推送至 `main` 分支且 `CI` 通过后，自动构建并更新 `dev-latest` Pre-release（支持在 Actions 中手动触发）。
 - **自动化产物构建**：
   - **Windows (x86_64)**：构建便携版 `bmvp-text-windows-x64.zip` 与独立安装包。
   - **macOS (Apple Silicon & Intel)**：生成标准的 `.app` 应用程序包并打包为 `.dmg` 与 `.tar.gz`。

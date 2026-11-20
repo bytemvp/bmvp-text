@@ -207,6 +207,19 @@ pub fn highlight_line(line: &str, lang: &str) -> Vec<SyntaxToken> {
 }
 
 pub fn token_color(token_type: TokenType, theme: &Theme) -> Hsla {
+    if theme.is_light() {
+        return match token_type {
+            TokenType::Keyword => rgb(0xa626a4).into(),
+            TokenType::Type => rgb(0xc18401).into(),
+            TokenType::Function => rgb(0x4078f2).into(),
+            TokenType::StringLiteral => rgb(0x50a14f).into(),
+            TokenType::NumberLiteral => rgb(0x986801).into(),
+            TokenType::Comment => theme.text_muted,
+            TokenType::Operator => theme.text_secondary,
+            TokenType::Default => theme.text_primary,
+        };
+    }
+
     match token_type {
         TokenType::Keyword => rgb(0xec7279).into(), // Zed keyword pink/red
         TokenType::Type => rgb(0xe5c07b).into(),    // Warm gold

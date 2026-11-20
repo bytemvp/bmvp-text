@@ -44,6 +44,7 @@ impl Sidebar {
         }
     }
 
+    #[allow(dead_code)]
     pub fn open_folder_dialog(&mut self) -> bool {
         if let Some(folder) = rfd::FileDialog::new().pick_folder() {
             self.set_root(folder);

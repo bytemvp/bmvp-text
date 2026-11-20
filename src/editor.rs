@@ -2,11 +2,11 @@ use crate::buffer::TextBuffer;
 use crate::file_finder::FileFinder;
 use crate::find_replace::FindState;
 use crate::settings::EditorSettings;
-use crate::settings_modal::SettingsModal;
+use crate::settings_modal::{FontDropdownTarget, SettingsModal};
 use crate::sidebar::Sidebar;
 use crate::status_bar::StatusBar;
 use crate::syntax::{highlight_line, token_color};
-use crate::system_terminal::SystemTerminal;
+use crate::system_terminal::{SystemTerminal, parse_ansi_spans, resolve_available_shell};
 use crate::theme::{Theme, ThemeMode};
 use gpui::*;
 use std::path::{Path, PathBuf};
@@ -35,10 +35,41 @@ pub struct EditorView {
     pub terminal_height: f32,
     pub resizing_sidebar: bool,
     pub resizing_terminal: bool,
+    pending_window_drag: Option<Point<Pixels>>,
+    terminal_polling: bool,
+    window_handle: AnyWindowHandle,
+
+    // 字体下拉列表状态
+    pub system_fonts: Vec<String>,
+    pub open_font_dropdown: Option<FontDropdownTarget>,
+    pub font_dropdown_query: String,
+    pub font_dropdown_scroll: usize,
+}
+
+fn extract_typed_text(keystroke: &Keystroke) -> Option<String> {
+    if keystroke.modifiers.control || keystroke.modifiers.platform || keystroke.modifiers.alt {
+        return None;
+    }
+    if let Some(ref kc) = keystroke.key_char
+        && !kc.is_empty()
+        && kc.chars().all(|c| !c.is_control())
+    {
+        return Some(kc.clone());
+    }
+    if keystroke.key == "space" {
+        return Some(" ".to_string());
+    }
+    if keystroke.key.chars().count() == 1
+        && let Some(ch) = keystroke.key.chars().next()
+        && !ch.is_control()
+    {
+        return Some(keystroke.key.clone());
+    }
+    None
 }
 
 impl EditorView {
-    pub fn new(_window: &mut Window, cx: &mut Context<Self>) -> Self {
+    pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         let initial_text = r#"// Welcome to bmvp-text
 // A lightweight, high-performance editor inspired by Zed
 // Pure Rust + GPUI · Zero AI bloat · Instant response
@@ -66,12 +97,6 @@ fn main() {
         let config = crate::settings::AppConfig::load();
         let default_buffer = TextBuffer::from_str(initial_text);
         let sidebar = Sidebar::new();
-        let current_dir = sidebar
-            .root_path
-            .clone()
-            .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
-        let default_terminal = SystemTerminal::new(1, "cmd 1", current_dir);
-
         Self {
             tabs: vec![default_buffer],
             active_tab: 0,
@@ -79,9 +104,9 @@ fn main() {
             show_sidebar: true,
             show_settings: false,
             show_terminal: false,
-            terminals: vec![default_terminal],
+            terminals: Vec::new(),
             active_terminal: 0,
-            next_terminal_id: 2,
+            next_terminal_id: 1,
             terminal_focused: false,
             file_finder: FileFinder::new(),
             find_state: FindState::new(),
@@ -94,7 +119,56 @@ fn main() {
             terminal_height: config.editor.terminal_height,
             resizing_sidebar: false,
             resizing_terminal: false,
+            pending_window_drag: None,
+            terminal_polling: false,
+            window_handle: window.window_handle(),
+            system_fonts: Vec::new(),
+            open_font_dropdown: None,
+            font_dropdown_query: String::new(),
+            font_dropdown_scroll: 0,
         }
+    }
+
+    pub fn ensure_system_fonts_loaded(&mut self, cx: &Context<Self>) {
+        if !self.system_fonts.is_empty() {
+            return;
+        }
+        let mut fonts: Vec<String> = cx
+            .text_system()
+            .all_font_names()
+            .into_iter()
+            .filter(|name| !name.starts_with('.'))
+            .collect();
+
+        for &fallback in EditorSettings::AVAILABLE_FONTS {
+            if !fonts.iter().any(|f| f.eq_ignore_ascii_case(fallback)) {
+                fonts.push(fallback.to_string());
+            }
+        }
+        for current in [
+            &self.settings.font_family,
+            &self.settings.terminal_font_family,
+        ] {
+            if !current.is_empty() && !fonts.iter().any(|f| f.eq_ignore_ascii_case(current)) {
+                fonts.push(current.clone());
+            }
+        }
+
+        fonts.sort_by_key(|a| a.to_lowercase());
+        fonts.dedup();
+        self.system_fonts = fonts;
+    }
+
+    pub fn toggle_settings_modal(&mut self, cx: &mut Context<Self>) {
+        self.show_settings = !self.show_settings;
+        if self.show_settings {
+            self.ensure_system_fonts_loaded(cx);
+        } else {
+            self.open_font_dropdown = None;
+            self.font_dropdown_query.clear();
+            self.font_dropdown_scroll = 0;
+        }
+        cx.notify();
     }
 
     pub fn save_config(&mut self) {
@@ -124,11 +198,18 @@ fn main() {
                 });
                 let id = self.next_terminal_id;
                 self.next_terminal_id += 1;
-                let title = format!("cmd {}", id);
-                self.terminals.push(SystemTerminal::new(id, &title, dir));
+                let shell_kind = resolve_available_shell(&self.settings.terminal_shell);
+                let title = format!("{} {}", shell_kind.short_name(), id);
+                self.terminals.push(SystemTerminal::new(
+                    id,
+                    &title,
+                    dir,
+                    &self.settings.terminal_shell,
+                ));
                 self.active_terminal = 0;
             }
             self.terminal_focused = true;
+            self.poll_active_terminals(cx);
         } else {
             self.terminal_focused = false;
         }
@@ -143,11 +224,18 @@ fn main() {
             .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
         let id = self.next_terminal_id;
         self.next_terminal_id += 1;
-        let title = format!("cmd {}", id);
-        self.terminals.push(SystemTerminal::new(id, &title, dir));
+        let shell_kind = resolve_available_shell(&self.settings.terminal_shell);
+        let title = format!("{} {}", shell_kind.short_name(), id);
+        self.terminals.push(SystemTerminal::new(
+            id,
+            &title,
+            dir,
+            &self.settings.terminal_shell,
+        ));
         self.active_terminal = self.terminals.len() - 1;
         self.show_terminal = true;
         self.terminal_focused = true;
+        self.poll_active_terminals(cx);
         cx.notify();
     }
 
@@ -179,39 +267,57 @@ fn main() {
     pub fn restart_terminal(&mut self) {
         if let Some(term) = self.terminals.get_mut(self.active_terminal) {
             let dir = self.sidebar.root_path.clone();
-            term.reload_profile(dir);
+            term.reload_session(dir, &self.settings.terminal_shell);
+            term.title = format!("{} {}", term.shell.short_name(), term.id);
         }
     }
 
     pub fn poll_active_terminals(&mut self, cx: &mut Context<Self>) {
-        if self.terminals.iter().any(|t| t.is_running) {
+        if self.terminal_polling {
+            return;
+        }
+        if (self.show_terminal && !self.terminals.is_empty())
+            || self.terminals.iter().any(|t| t.is_running)
+        {
+            self.terminal_polling = true;
+            let win_handle = self.window_handle;
             cx.spawn(move |view: WeakEntity<Self>, cx: &mut AsyncApp| {
                 let background = cx.background_executor().clone();
                 let mut cx = cx.clone();
                 async move {
                     loop {
-                        background.timer(std::time::Duration::from_millis(30)).await;
-                        let should_continue = view
-                            .update(&mut cx, |this, cx| {
-                                let mut any_running = false;
+                        background.timer(std::time::Duration::from_millis(50)).await;
+                        let res = cx.update_window(win_handle, |_, _window, app| {
+                            let Some(entity) = view.upgrade() else {
+                                return false;
+                            };
+                            entity.update(app, |this, cx| {
                                 let mut had_output = false;
                                 for term in &mut this.terminals {
                                     if term.poll_output() {
                                         had_output = true;
                                     }
-                                    if term.is_running {
-                                        any_running = true;
-                                    }
                                 }
                                 if had_output {
                                     cx.notify();
                                 }
-                                any_running
+                                let keep = (this.show_terminal && !this.terminals.is_empty())
+                                    || this.terminals.iter().any(|t| t.is_running);
+                                if !keep {
+                                    this.terminal_polling = false;
+                                }
+                                keep
                             })
-                            .unwrap_or(false);
+                        });
 
-                        if !should_continue {
-                            break;
+                        match res {
+                            Ok(true) => continue,
+                            Ok(false) => break,
+                            Err(e) => {
+                                if view.upgrade().is_none() || !e.to_string().contains("borrow") {
+                                    break;
+                                }
+                            }
                         }
                     }
                 }
@@ -255,30 +361,91 @@ fn main() {
     }
 
     pub fn open_file_dialog(&mut self, cx: &mut Context<Self>) {
-        if let Some(path) = rfd::FileDialog::new().pick_file() {
-            self.open_file_path(&path, cx);
-        }
+        let win_handle = self.window_handle;
+        cx.spawn(move |view: WeakEntity<Self>, cx: &mut AsyncApp| {
+            let background = cx.background_executor().clone();
+            let mut cx = cx.clone();
+            async move {
+                let picked = background
+                    .spawn(async { rfd::FileDialog::new().pick_file() })
+                    .await;
+                if let Some(path) = picked {
+                    let _ = cx.update_window(win_handle, |_, _window, app| {
+                        if let Some(entity) = view.upgrade() {
+                            entity.update(app, |this, cx| {
+                                this.open_file_path(&path, cx);
+                            });
+                        }
+                    });
+                }
+            }
+        })
+        .detach();
     }
 
     pub fn open_folder_dialog(&mut self, cx: &mut Context<Self>) {
-        if self.sidebar.open_folder_dialog() {
-            if let Some(ref root) = self.sidebar.root_path {
-                for term in &mut self.terminals {
-                    term.set_working_dir(root.clone());
+        let win_handle = self.window_handle;
+        cx.spawn(move |view: WeakEntity<Self>, cx: &mut AsyncApp| {
+            let background = cx.background_executor().clone();
+            let mut cx = cx.clone();
+            async move {
+                let picked = background
+                    .spawn(async { rfd::FileDialog::new().pick_folder() })
+                    .await;
+                if let Some(folder) = picked {
+                    let _ = cx.update_window(win_handle, |_, _window, app| {
+                        if let Some(entity) = view.upgrade() {
+                            entity.update(app, |this, cx| {
+                                this.sidebar.set_root(folder.clone());
+                                for term in &mut this.terminals {
+                                    term.set_working_dir(folder.clone());
+                                }
+                                cx.notify();
+                            });
+                        }
+                    });
                 }
             }
-            cx.notify();
-        }
+        })
+        .detach();
     }
 
     pub fn save_current_file(&mut self, cx: &mut Context<Self>) {
-        if let Some(buf) = self.current_buffer_mut() {
-            if buf.file_path().is_some() {
+        let has_path = self
+            .current_buffer()
+            .is_some_and(|b| b.file_path().is_some());
+        if has_path {
+            if let Some(buf) = self.current_buffer_mut() {
                 let _ = buf.save_file(None);
-            } else if let Some(path) = rfd::FileDialog::new().save_file() {
-                let _ = buf.save_file(Some(&path));
+                cx.notify();
             }
-            cx.notify();
+            return;
+        }
+        if self.current_buffer().is_some() {
+            let win_handle = self.window_handle;
+            let active_idx = self.active_tab;
+            cx.spawn(move |view: WeakEntity<Self>, cx: &mut AsyncApp| {
+                let background = cx.background_executor().clone();
+                let mut cx = cx.clone();
+                async move {
+                    let picked = background
+                        .spawn(async { rfd::FileDialog::new().save_file() })
+                        .await;
+                    if let Some(path) = picked {
+                        let _ = cx.update_window(win_handle, |_, _window, app| {
+                            if let Some(entity) = view.upgrade() {
+                                entity.update(app, |this, cx| {
+                                    if let Some(buf) = this.tabs.get_mut(active_idx) {
+                                        let _ = buf.save_file(Some(&path));
+                                        cx.notify();
+                                    }
+                                });
+                            }
+                        });
+                    }
+                }
+            })
+            .detach();
         }
     }
 
@@ -388,6 +555,15 @@ fn main() {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if let Some(start_pos) = self.pending_window_drag {
+            let dx = (f32::from(event.position.x) - f32::from(start_pos.x)).abs();
+            let dy = (f32::from(event.position.y) - f32::from(start_pos.y)).abs();
+            if dx > 3.0 || dy > 3.0 {
+                self.pending_window_drag = None;
+                crate::window_controls::start_window_drag(window);
+            }
+            return;
+        }
         if self.resizing_sidebar {
             let x: f32 = event.position.x.into();
             let win_w: f32 = window.viewport_size().width.into();
@@ -416,11 +592,14 @@ fn main() {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if event.button == MouseButton::Left && (self.resizing_sidebar || self.resizing_terminal) {
-            self.resizing_sidebar = false;
-            self.resizing_terminal = false;
-            self.save_config();
-            cx.notify();
+        if event.button == MouseButton::Left {
+            self.pending_window_drag = None;
+            if self.resizing_sidebar || self.resizing_terminal {
+                self.resizing_sidebar = false;
+                self.resizing_terminal = false;
+                self.save_config();
+                cx.notify();
+            }
         }
     }
 
@@ -457,12 +636,8 @@ fn main() {
                     self.file_finder.refilter();
                 }
                 _ => {
-                    if !is_ctrl
-                        && event.keystroke.key.chars().count() == 1
-                        && let Some(ch) = event.keystroke.key.chars().next()
-                        && !ch.is_control()
-                    {
-                        self.file_finder.query.push(ch);
+                    if !is_ctrl && let Some(text) = extract_typed_text(&event.keystroke) {
+                        self.file_finder.query.push_str(&text);
                         self.file_finder.refilter();
                     }
                 }
@@ -473,6 +648,47 @@ fn main() {
 
         // 2. Settings Modal 弹窗快捷键
         if self.show_settings {
+            if self.open_font_dropdown.is_some() {
+                match key {
+                    "escape" => {
+                        self.open_font_dropdown = None;
+                        self.font_dropdown_query.clear();
+                        self.font_dropdown_scroll = 0;
+                        cx.notify();
+                    }
+                    "backspace" => {
+                        self.font_dropdown_query.pop();
+                        self.font_dropdown_scroll = 0;
+                        cx.notify();
+                    }
+                    "up" => {
+                        self.font_dropdown_scroll = self.font_dropdown_scroll.saturating_sub(1);
+                        cx.notify();
+                    }
+                    "down" => {
+                        let q = self.font_dropdown_query.trim().to_lowercase();
+                        let count = if q.is_empty() {
+                            self.system_fonts.len()
+                        } else {
+                            self.system_fonts
+                                .iter()
+                                .filter(|f| f.to_lowercase().contains(&q))
+                                .count()
+                        };
+                        let max_scroll = count.saturating_sub(8);
+                        self.font_dropdown_scroll = (self.font_dropdown_scroll + 1).min(max_scroll);
+                        cx.notify();
+                    }
+                    _ => {
+                        if !is_ctrl && let Some(text) = extract_typed_text(&event.keystroke) {
+                            self.font_dropdown_query.push_str(&text);
+                            self.font_dropdown_scroll = 0;
+                            cx.notify();
+                        }
+                    }
+                }
+                return;
+            }
             if key == "escape" {
                 self.show_settings = false;
                 cx.notify();
@@ -508,12 +724,8 @@ fn main() {
                 cx.notify();
                 return;
             }
-            if !is_ctrl
-                && event.keystroke.key.chars().count() == 1
-                && let Some(ch) = event.keystroke.key.chars().next()
-                && !ch.is_control()
-            {
-                self.find_state.query.push(ch);
+            if !is_ctrl && let Some(text) = extract_typed_text(&event.keystroke) {
+                self.find_state.query.push_str(&text);
                 self.update_find_matches();
                 cx.notify();
                 return;
@@ -542,8 +754,7 @@ fn main() {
                         return;
                     }
                     "," => {
-                        self.show_settings = !self.show_settings;
-                        cx.notify();
+                        self.toggle_settings_modal(cx);
                         return;
                     }
                     "b" | "B" => {
@@ -677,11 +888,8 @@ fn main() {
                         return;
                     }
                     _ => {
-                        if let Some(ch) = event.keystroke.key.chars().next()
-                            && event.keystroke.key.chars().count() == 1
-                            && !ch.is_control()
-                        {
-                            term.insert_char(ch);
+                        if let Some(text) = extract_typed_text(&event.keystroke) {
+                            term.insert_str(&text);
                             cx.notify();
                             return;
                         }
@@ -706,8 +914,7 @@ fn main() {
                     return;
                 }
                 "," => {
-                    self.show_settings = !self.show_settings;
-                    cx.notify();
+                    self.toggle_settings_modal(cx);
                     return;
                 }
                 "b" | "B" => {
@@ -822,12 +1029,8 @@ fn main() {
                 "home" => buf.move_home(is_shift),
                 "end" => buf.move_end(is_shift),
                 _ => {
-                    if !is_ctrl
-                        && let Some(ch) = event.keystroke.key.chars().next()
-                        && event.keystroke.key.chars().count() == 1
-                        && !ch.is_control()
-                    {
-                        buf.insert_char(ch);
+                    if !is_ctrl && let Some(text) = extract_typed_text(&event.keystroke) {
+                        buf.insert(&text);
                     }
                 }
             }
@@ -845,298 +1048,636 @@ fn main() {
     }
 }
 
-impl Render for EditorView {
-    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+impl EditorView {
+    fn render_sidebar(&self, project_name: &str, cx: &mut Context<Self>) -> AnyElement {
         let theme = &self.theme;
-        let is_maximized = crate::window_controls::is_window_maximized(window);
+        let mut file_items = Vec::new();
+        for (idx, item) in self.sidebar.items.iter().enumerate() {
+            let path = item.path.clone();
+            let is_dir = item.is_dir;
+            let is_expanded = item.is_expanded;
+            let depth = item.depth;
+            let icon = Sidebar::file_icon(is_dir, is_expanded, &item.name);
 
-        // 轮询终端后台输出队列并显示最新内容
-        for term in &mut self.terminals {
-            term.poll_output();
+            let indent_px = 10.0 + (depth as f32) * 12.0;
+            let arrow = if is_dir {
+                if is_expanded { "⌄ " } else { "› " }
+            } else {
+                "  "
+            };
+
+            let item_div = div()
+                .h_6()
+                .pl(px(indent_px))
+                .pr_2()
+                .mx_1p5()
+                .rounded_xs()
+                .flex()
+                .items_center()
+                .gap_1p5()
+                .cursor_pointer()
+                .hover(|s| s.bg(theme.bg_hover))
+                .text_color(if is_dir {
+                    theme.text_primary
+                } else {
+                    theme.text_secondary
+                })
+                .text_xs()
+                .child(
+                    div()
+                        .text_color(theme.text_muted)
+                        .font_family("Consolas")
+                        .child(arrow),
+                )
+                .child(
+                    div()
+                        .w(px(20.0))
+                        .text_xs()
+                        .text_color(if is_dir {
+                            theme.accent
+                        } else {
+                            theme.text_muted
+                        })
+                        .font_family("Consolas")
+                        .child(icon),
+                )
+                .child(div().child(item.name.clone()))
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(move |this, _, _win, cx| {
+                        if is_dir {
+                            this.sidebar.toggle_expand(idx);
+                        } else {
+                            this.open_file_path(&path, cx);
+                        }
+                        cx.notify();
+                    }),
+                )
+                .into_any_element();
+
+            file_items.push(item_div);
         }
 
-        let project_name = self
-            .sidebar
-            .root_path
-            .as_ref()
-            .and_then(|p| p.file_name())
-            .map(|s| s.to_string_lossy().to_string())
-            .unwrap_or_else(|| "bmvp-text".into());
+        let sidebar_body = if file_items.is_empty() {
+            div()
+                .flex_1()
+                .flex()
+                .flex_col()
+                .items_center()
+                .justify_center()
+                .px_4()
+                .gap_2p5()
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(theme.text_secondary)
+                        .text_center()
+                        .child("Choose an option below to open files"),
+                )
+                .child(
+                    div()
+                        .px_3()
+                        .py_1()
+                        .rounded_xs()
+                        .cursor_pointer()
+                        .hover(|s| s.bg(theme.bg_hover))
+                        .flex()
+                        .items_center()
+                        .gap_2()
+                        .text_xs()
+                        .child(div().text_color(theme.text_primary).child("Open Project"))
+                        .child(div().text_color(theme.text_muted).child("Ctrl+O"))
+                        .on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(|this, _, _win, cx| {
+                                this.open_folder_dialog(cx);
+                            }),
+                        ),
+                )
+                .child(
+                    div()
+                        .w(px(140.0))
+                        .flex()
+                        .items_center()
+                        .gap_2()
+                        .child(div().flex_1().h(px(1.0)).bg(theme.border_subtle))
+                        .child(div().text_xs().text_color(theme.text_muted).child("or"))
+                        .child(div().flex_1().h(px(1.0)).bg(theme.border_subtle)),
+                )
+                .child(
+                    div()
+                        .px_3()
+                        .py_1()
+                        .rounded_xs()
+                        .cursor_pointer()
+                        .hover(|s| s.bg(theme.bg_hover))
+                        .text_xs()
+                        .text_color(theme.text_primary)
+                        .child("New Untitled File")
+                        .on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(|this, _, _win, cx| {
+                                this.new_tab(cx);
+                            }),
+                        ),
+                )
+                .into_any_element()
+        } else {
+            div()
+                .flex_1()
+                .overflow_hidden()
+                .py_1()
+                .children(file_items)
+                .into_any_element()
+        };
 
-        // =========================================================================
-        // 1. 左侧 Zed 项目侧边栏 (Explorer Panel - 自顶向下无缝布局)
-        // =========================================================================
-        let sidebar_element = if self.show_sidebar {
-            let mut file_items = Vec::new();
-            for (idx, item) in self.sidebar.items.iter().enumerate() {
-                let path = item.path.clone();
-                let is_dir = item.is_dir;
-                let is_expanded = item.is_expanded;
-                let depth = item.depth;
-                let icon = Sidebar::file_icon(is_dir, is_expanded, &item.name);
-
-                let indent_px = 8.0 + (depth as f32) * 12.0;
-                let arrow = if is_dir {
-                    if is_expanded { "⌄ " } else { "› " }
-                } else {
-                    "  "
-                };
-
-                let item_div = div()
-                    .h_6()
-                    .pl(px(indent_px))
-                    .pr_2()
-                    .mx_1()
-                    .rounded_xs()
+        let header = div()
+            .h(px(32.0))
+            .px_3()
+            .flex()
+            .items_center()
+            .justify_between()
+            .child(
+                div()
                     .flex()
                     .items_center()
                     .gap_1p5()
-                    .cursor_pointer()
-                    .hover(|s| s.bg(theme.bg_hover))
-                    .text_color(if is_dir {
-                        theme.text_primary
-                    } else {
-                        theme.text_secondary
-                    })
-                    .text_xs()
-                    .child(
-                        div()
-                            .text_color(theme.text_muted)
-                            .font_family("Consolas")
-                            .child(arrow),
+                    .h_full()
+                    .cursor_default()
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(|this, event: &MouseDownEvent, win, cx| {
+                            if event.click_count >= 2 {
+                                this.pending_window_drag = None;
+                                crate::window_controls::toggle_maximize(win);
+                                cx.notify();
+                            } else {
+                                this.pending_window_drag = Some(event.position);
+                            }
+                            cx.stop_propagation();
+                        }),
                     )
                     .child(
                         div()
-                            .w(px(20.0))
                             .text_xs()
-                            .text_color(if is_dir {
-                                theme.accent
-                            } else {
-                                theme.text_muted
-                            })
-                            .font_family("Consolas")
-                            .child(icon),
-                    )
-                    .child(div().child(item.name.clone()))
-                    .on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(move |this, _, _win, cx| {
-                            if is_dir {
-                                this.sidebar.toggle_expand(idx);
-                            } else {
-                                this.open_file_path(&path, cx);
-                            }
-                            cx.notify();
-                        }),
-                    );
-
-                file_items.push(item_div);
-            }
-
-            Some(
-                div()
-                    .w(px(self.sidebar_width))
-                    .h_full()
-                    .bg(theme.bg_surface)
-                    .flex()
-                    .flex_col()
-                    // 侧边栏顶部工具栏 (高度统一为 32px，与右侧 TabBar 齐平连贯)
-                    .child(
-                        div()
-                            .h(px(32.0))
-                            .px_3()
-                            .flex()
-                            .items_center()
-                            .justify_between()
-                            .border_b_1()
-                            .border_color(theme.border_subtle)
-                            .child(
-                                div().flex().items_center().gap_1p5().child(
-                                    div()
-                                        .text_xs()
-                                        .font_weight(FontWeight::MEDIUM)
-                                        .text_color(theme.text_primary)
-                                        .child(project_name.clone()),
-                                ),
-                            )
-                            .child(div().flex_1().h_full().cursor_default().on_mouse_down(
-                                MouseButton::Left,
-                                cx.listener(|_this, event: &MouseDownEvent, win, cx| {
-                                    if event.click_count == 2 {
-                                        crate::window_controls::toggle_maximize(win);
-                                        cx.notify();
-                                    } else {
-                                        crate::window_controls::start_window_drag(win);
-                                    }
-                                }),
-                            ))
-                            .child(
-                                div()
-                                    .flex()
-                                    .items_center()
-                                    .gap_1()
-                                    .child(
-                                        div()
-                                            .w_5()
-                                            .h_5()
-                                            .rounded_xs()
-                                            .flex()
-                                            .items_center()
-                                            .justify_center()
-                                            .cursor_pointer()
-                                            .hover(|s| {
-                                                s.bg(theme.bg_hover).text_color(theme.text_primary)
-                                            })
-                                            .text_color(theme.text_muted)
-                                            .text_xs()
-                                            .child("+")
-                                            .on_mouse_down(
-                                                MouseButton::Left,
-                                                cx.listener(|this, _, _win, cx| {
-                                                    this.new_tab(cx);
-                                                }),
-                                            ),
-                                    )
-                                    .child(
-                                        div()
-                                            .w_5()
-                                            .h_5()
-                                            .rounded_xs()
-                                            .flex()
-                                            .items_center()
-                                            .justify_center()
-                                            .cursor_pointer()
-                                            .hover(|s| {
-                                                s.bg(theme.bg_hover).text_color(theme.text_primary)
-                                            })
-                                            .text_color(theme.text_muted)
-                                            .text_xs()
-                                            .child("⟳")
-                                            .on_mouse_down(
-                                                MouseButton::Left,
-                                                cx.listener(|this, _, _win, cx| {
-                                                    this.sidebar.refresh();
-                                                    cx.notify();
-                                                }),
-                                            ),
-                                    )
-                                    .child(
-                                        div()
-                                            .w_5()
-                                            .h_5()
-                                            .rounded_xs()
-                                            .flex()
-                                            .items_center()
-                                            .justify_center()
-                                            .cursor_pointer()
-                                            .hover(|s| {
-                                                s.bg(theme.bg_hover).text_color(theme.text_primary)
-                                            })
-                                            .text_color(theme.text_muted)
-                                            .text_xs()
-                                            .child("📂")
-                                            .on_mouse_down(
-                                                MouseButton::Left,
-                                                cx.listener(|this, _, _win, cx| {
-                                                    this.open_folder_dialog(cx);
-                                                }),
-                                            ),
-                                    )
-                                    .child(
-                                        div()
-                                            .w_5()
-                                            .h_5()
-                                            .rounded_xs()
-                                            .flex()
-                                            .items_center()
-                                            .justify_center()
-                                            .cursor_pointer()
-                                            .hover(|s| {
-                                                s.bg(theme.bg_hover).text_color(theme.text_primary)
-                                            })
-                                            .text_color(theme.text_muted)
-                                            .text_xs()
-                                            .child("‹")
-                                            .on_mouse_down(
-                                                MouseButton::Left,
-                                                cx.listener(|this, _, _win, cx| {
-                                                    this.show_sidebar = false;
-                                                    cx.notify();
-                                                }),
-                                            ),
-                                    ),
-                            ),
-                    )
-                    // 树目录列表
-                    .child(div().flex_1().overflow_hidden().py_1().children(file_items)),
-            )
-        } else {
-            None
-        };
-
-        // 侧边栏与主编辑区的纵向拖拽分割把手 (Vertical Resizer Splitter)
-        let sidebar_resizer = if self.show_sidebar {
-            let is_resizing = self.resizing_sidebar;
-            Some(
-                div()
-                    .w(px(4.0))
-                    .h_full()
-                    .cursor_col_resize()
-                    .bg(if is_resizing {
-                        theme.accent
-                    } else {
-                        theme.border_subtle
-                    })
-                    .hover(|s| s.bg(theme.accent))
-                    .on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(|this, event: &MouseDownEvent, _win, cx| {
-                            if event.click_count == 2 {
-                                this.sidebar_width = 230.0;
-                                this.resizing_sidebar = false;
-                                this.save_config();
-                            } else {
-                                this.resizing_sidebar = true;
-                            }
-                            cx.notify();
-                        }),
+                            .font_weight(FontWeight::MEDIUM)
+                            .text_color(theme.text_primary)
+                            .child(project_name.to_string()),
                     ),
             )
-        } else {
-            None
-        };
-
-        // =========================================================================
-        // 2. Zed 标签栏 (Tab Bar: 包含文件Tabs、居中搜索胶囊、右侧操作按钮)
-        // =========================================================================
-        let mut tab_elements = Vec::new();
-
-        // 侧边栏折叠时，在最左侧显示唤起图标
-        if !self.show_sidebar {
-            tab_elements.push(
+            .child(div().flex_1().h_full().cursor_default().on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|this, event: &MouseDownEvent, win, cx| {
+                    if event.click_count >= 2 {
+                        this.pending_window_drag = None;
+                        crate::window_controls::toggle_maximize(win);
+                        cx.notify();
+                    } else {
+                        this.pending_window_drag = Some(event.position);
+                    }
+                    cx.stop_propagation();
+                }),
+            ))
+            .child(
                 div()
-                    .h_7()
-                    .px_2()
-                    .mr_1()
-                    .rounded_xs()
                     .flex()
                     .items_center()
                     .gap_1()
+                    .child(
+                        div()
+                            .w_5()
+                            .h_5()
+                            .rounded_xs()
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .cursor_pointer()
+                            .hover(|s| s.bg(theme.bg_hover).text_color(theme.text_primary))
+                            .text_color(theme.text_secondary)
+                            .text_xs()
+                            .child("+")
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(|this, _, _win, cx| {
+                                    this.new_tab(cx);
+                                }),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .w_5()
+                            .h_5()
+                            .rounded_xs()
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .cursor_pointer()
+                            .hover(|s| s.bg(theme.bg_hover).text_color(theme.text_primary))
+                            .text_color(theme.text_secondary)
+                            .text_xs()
+                            .child("⟳")
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(|this, _, _win, cx| {
+                                    this.sidebar.refresh();
+                                    cx.notify();
+                                }),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .w_5()
+                            .h_5()
+                            .rounded_xs()
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .cursor_pointer()
+                            .hover(|s| s.bg(theme.bg_hover).text_color(theme.text_primary))
+                            .text_color(theme.text_secondary)
+                            .text_xs()
+                            .child("📂")
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(|this, _, _win, cx| {
+                                    this.open_folder_dialog(cx);
+                                }),
+                            ),
+                    ),
+            )
+            .into_any_element();
+
+        let footer = div()
+            .h(px(26.0))
+            .px_2p5()
+            .bg(theme.bg_surface)
+            .border_t_1()
+            .border_color(theme.border_subtle)
+            .flex()
+            .items_center()
+            .justify_between()
+            .child(
+                div()
+                    .w_5()
+                    .h_5()
+                    .rounded_xs()
+                    .flex()
+                    .items_center()
+                    .justify_center()
                     .cursor_pointer()
                     .hover(|s| s.bg(theme.bg_hover).text_color(theme.text_primary))
-                    .text_color(theme.text_muted)
+                    .text_color(theme.text_secondary)
                     .text_xs()
-                    .child("≡")
-                    .child("Explorer")
+                    .child("◧")
                     .on_mouse_down(
                         MouseButton::Left,
                         cx.listener(|this, _, _win, cx| {
-                            this.show_sidebar = true;
+                            this.show_sidebar = false;
                             cx.notify();
                         }),
                     ),
+            )
+            .child(
+                div()
+                    .w_5()
+                    .h_5()
+                    .rounded_xs()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .cursor_pointer()
+                    .hover(|s| s.bg(theme.bg_hover).text_color(theme.text_primary))
+                    .text_color(theme.text_secondary)
+                    .text_xs()
+                    .child("⚙")
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(|this, _, _win, cx| {
+                            this.toggle_settings_modal(cx);
+                        }),
+                    ),
+            )
+            .into_any_element();
+
+        div()
+            .w(px(self.sidebar_width))
+            .h_full()
+            .bg(theme.bg_surface)
+            .flex()
+            .flex_col()
+            .child(header)
+            .child(sidebar_body)
+            .child(footer)
+            .into_any_element()
+    }
+
+    fn render_title_bar(
+        &self,
+        project_name: &str,
+        is_maximized: bool,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let theme = &self.theme;
+        let max_icon = if is_maximized { "⧉" } else { "□" };
+
+        let window_controls = div()
+            .flex()
+            .h_full()
+            .items_center()
+            .child(
+                div()
+                    .w(px(38.0))
+                    .h_full()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .cursor_pointer()
+                    .text_xs()
+                    .text_color(theme.text_secondary)
+                    .hover(|s| s.bg(theme.bg_hover).text_color(theme.text_primary))
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(|_this, _, win, cx| {
+                            crate::window_controls::minimize_window(win);
+                            cx.stop_propagation();
+                        }),
+                    )
+                    .child("─"),
+            )
+            .child(
+                div()
+                    .w(px(38.0))
+                    .h_full()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .cursor_pointer()
+                    .text_xs()
+                    .text_color(theme.text_secondary)
+                    .hover(|s| s.bg(theme.bg_hover).text_color(theme.text_primary))
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(|_this, _, win, cx| {
+                            crate::window_controls::toggle_maximize(win);
+                            cx.stop_propagation();
+                            cx.notify();
+                        }),
+                    )
+                    .child(max_icon),
+            )
+            .child(
+                div()
+                    .w(px(42.0))
+                    .h_full()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .cursor_pointer()
+                    .text_xs()
+                    .text_color(theme.text_secondary)
+                    .hover(|s| s.bg(rgb(0xe81123)).text_color(rgb(0xffffff)))
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(|_this, _, _win, cx| {
+                            cx.stop_propagation();
+                            cx.quit();
+                        }),
+                    )
+                    .child("✕"),
             );
-        }
+
+        div()
+            .h(px(32.0))
+            .w_full()
+            .bg(theme.bg_activity_bar)
+            .flex()
+            .items_center()
+            .pl_2p5()
+            .pr_0()
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap_1p5()
+                    .child(
+                        div()
+                            .w(px(22.0))
+                            .h(px(22.0))
+                            .rounded_xs()
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .cursor_pointer()
+                            .hover(|s| s.bg(theme.bg_hover).text_color(theme.text_primary))
+                            .text_xs()
+                            .text_color(theme.text_secondary)
+                            .child("≡")
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(|this, _, _win, cx| {
+                                    this.show_sidebar = !this.show_sidebar;
+                                    cx.notify();
+                                }),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .px_1p5()
+                            .py_0p5()
+                            .rounded_xs()
+                            .cursor_pointer()
+                            .hover(|s| s.bg(theme.bg_hover))
+                            .text_xs()
+                            .text_color(theme.text_primary)
+                            .child(project_name.to_string())
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(|this, _, _win, cx| {
+                                    this.open_folder_dialog(cx);
+                                }),
+                            ),
+                    ),
+            )
+            .child(
+                div()
+                    .flex_1()
+                    .h_full()
+                    .min_w(px(20.0))
+                    .cursor_default()
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(|this, event: &MouseDownEvent, win, cx| {
+                            if event.click_count >= 2 {
+                                this.pending_window_drag = None;
+                                crate::window_controls::toggle_maximize(win);
+                                cx.notify();
+                            } else {
+                                this.pending_window_drag = Some(event.position);
+                            }
+                            cx.stop_propagation();
+                        }),
+                    ),
+            )
+            .child(
+                div()
+                    .flex()
+                    .h_full()
+                    .items_center()
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap_1()
+                            .pr_1()
+                            .child(
+                                div()
+                                    .w(px(24.0))
+                                    .h(px(22.0))
+                                    .rounded_xs()
+                                    .flex()
+                                    .items_center()
+                                    .justify_center()
+                                    .cursor_pointer()
+                                    .hover(|s| s.bg(theme.bg_hover).text_color(theme.text_primary))
+                                    .text_xs()
+                                    .text_color(theme.text_secondary)
+                                    .child("⌕")
+                                    .on_mouse_down(
+                                        MouseButton::Left,
+                                        cx.listener(|this, _, _win, cx| {
+                                            this.open_file_finder(cx);
+                                        }),
+                                    ),
+                            )
+                            .child(
+                                div()
+                                    .w(px(24.0))
+                                    .h(px(22.0))
+                                    .rounded_xs()
+                                    .flex()
+                                    .items_center()
+                                    .justify_center()
+                                    .cursor_pointer()
+                                    .hover(|s| s.bg(theme.bg_hover).text_color(theme.text_primary))
+                                    .text_xs()
+                                    .text_color(if self.show_terminal {
+                                        theme.accent
+                                    } else {
+                                        theme.text_secondary
+                                    })
+                                    .child(">_")
+                                    .on_mouse_down(
+                                        MouseButton::Left,
+                                        cx.listener(|this, _, _win, cx| {
+                                            this.toggle_terminal(cx);
+                                        }),
+                                    ),
+                            )
+                            .child(
+                                div()
+                                    .w(px(24.0))
+                                    .h(px(22.0))
+                                    .rounded_xs()
+                                    .flex()
+                                    .items_center()
+                                    .justify_center()
+                                    .cursor_pointer()
+                                    .hover(|s| s.bg(theme.bg_hover).text_color(theme.text_primary))
+                                    .text_xs()
+                                    .text_color(if self.show_settings {
+                                        theme.accent
+                                    } else {
+                                        theme.text_secondary
+                                    })
+                                    .child("⚙")
+                                    .on_mouse_down(
+                                        MouseButton::Left,
+                                        cx.listener(|this, _, _win, cx| {
+                                            this.toggle_settings_modal(cx);
+                                        }),
+                                    ),
+                            ),
+                    )
+                    .child(window_controls),
+            )
+            .into_any_element()
+    }
+
+    fn render_tab_bar(&self, cx: &mut Context<Self>) -> AnyElement {
+        let theme = &self.theme;
+        let tab_count = self.tabs.len();
+        let can_prev = self.active_tab > 0;
+        let can_next = self.active_tab + 1 < tab_count;
+
+        let mut tab_row_items: Vec<AnyElement> = Vec::new();
+
+        tab_row_items.push(
+            div()
+                .h_full()
+                .px_2()
+                .border_b_1()
+                .border_color(theme.border_subtle)
+                .flex()
+                .items_center()
+                .gap_1()
+                .child(
+                    div()
+                        .w(px(20.0))
+                        .h(px(20.0))
+                        .rounded_xs()
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .cursor_pointer()
+                        .text_xs()
+                        .text_color(if can_prev {
+                            theme.text_secondary
+                        } else {
+                            theme.text_muted
+                        })
+                        .hover(|s| s.bg(theme.bg_hover).text_color(theme.text_primary))
+                        .child("←")
+                        .on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(|this, _, _win, cx| {
+                                if this.active_tab > 0 {
+                                    this.active_tab -= 1;
+                                    this.terminal_focused = false;
+                                    cx.notify();
+                                }
+                            }),
+                        ),
+                )
+                .child(
+                    div()
+                        .w(px(20.0))
+                        .h(px(20.0))
+                        .rounded_xs()
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .cursor_pointer()
+                        .text_xs()
+                        .text_color(if can_next {
+                            theme.text_secondary
+                        } else {
+                            theme.text_muted
+                        })
+                        .hover(|s| s.bg(theme.bg_hover).text_color(theme.text_primary))
+                        .child("→")
+                        .on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(|this, _, _win, cx| {
+                                if this.active_tab + 1 < this.tabs.len() {
+                                    this.active_tab += 1;
+                                    this.terminal_focused = false;
+                                    cx.notify();
+                                }
+                            }),
+                        ),
+                )
+                .into_any_element(),
+        );
 
         for (idx, tab) in self.tabs.iter().enumerate() {
             let is_active = idx == self.active_tab;
@@ -1155,7 +1696,7 @@ impl Render for EditorView {
             };
 
             let mut tab_btn = div()
-                .h(px(32.0))
+                .h_full()
                 .px_3()
                 .flex()
                 .items_center()
@@ -1168,8 +1709,6 @@ impl Render for EditorView {
                 } else {
                     FontWeight::NORMAL
                 })
-                .border_r_1()
-                .border_color(theme.border_subtle)
                 .cursor_pointer()
                 .hover(|s| {
                     s.bg(if is_active {
@@ -1188,20 +1727,18 @@ impl Render for EditorView {
                 );
 
             if is_active {
-                tab_btn = tab_btn.border_t_1().border_color(theme.accent);
+                tab_btn = tab_btn
+                    .border_t_1()
+                    .border_l_1()
+                    .border_r_1()
+                    .border_color(theme.border_subtle);
             } else {
-                tab_btn = tab_btn.border_b_1().border_color(theme.border_subtle);
+                tab_btn = tab_btn
+                    .border_b_1()
+                    .border_r_1()
+                    .border_color(theme.border_subtle);
             }
 
-            let icon = Sidebar::file_icon(false, false, &title);
-            tab_btn = tab_btn.child(
-                div()
-                    .w(px(18.0))
-                    .text_xs()
-                    .text_color(theme.text_muted)
-                    .font_family("Consolas")
-                    .child(icon),
-            );
             tab_btn = tab_btn.child(title);
 
             if dirty {
@@ -1222,6 +1759,7 @@ impl Render for EditorView {
                     .items_center()
                     .justify_center()
                     .rounded_xs()
+                    .text_color(theme.text_muted)
                     .hover(|s| s.bg(theme.bg_hover).text_color(theme.error))
                     .child("×")
                     .on_mouse_down(
@@ -1232,17 +1770,20 @@ impl Render for EditorView {
                     ),
             );
 
-            tab_elements.push(tab_btn);
+            tab_row_items.push(tab_btn.into_any_element());
         }
 
-        tab_elements.push(
+        tab_row_items.push(
             div()
-                .h(px(32.0))
+                .h_full()
                 .px_2p5()
+                .border_b_1()
+                .border_color(theme.border_subtle)
                 .flex()
                 .items_center()
                 .justify_center()
                 .cursor_pointer()
+                .text_xs()
                 .text_color(theme.text_muted)
                 .hover(|s| s.bg(theme.bg_hover).text_color(theme.text_primary))
                 .child("+")
@@ -1251,368 +1792,56 @@ impl Render for EditorView {
                     cx.listener(|this, _, _win, cx| {
                         this.new_tab(cx);
                     }),
-                ),
+                )
+                .into_any_element(),
         );
 
-        // 居中快速检索胶囊 (Zed Signature Command Palette Pill)
-        let search_pill = div()
-            .w(px(320.0))
-            .h(px(24.0))
-            .bg(theme.bg_editor)
-            .border_1()
-            .border_color(theme.border_subtle)
-            .rounded_md()
-            .flex()
-            .items_center()
-            .justify_between()
-            .px_3()
-            .cursor_pointer()
-            .hover(|s| s.border_color(theme.accent).bg(theme.bg_hover))
-            .on_mouse_down(
-                MouseButton::Left,
-                cx.listener(|this, _, _win, cx| {
-                    this.open_file_finder(cx);
-                }),
-            )
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap_2()
-                    .child(div().text_xs().text_color(theme.accent).child("⌕"))
-                    .child(
-                        div()
-                            .text_xs()
-                            .text_color(theme.text_secondary)
-                            .child("Go to file..."),
-                    ),
-            )
-            .child(
-                div()
-                    .px_1p5()
-                    .py_0p5()
-                    .rounded_xs()
-                    .bg(theme.bg_hover)
-                    .border_1()
-                    .border_color(theme.border_subtle)
-                    .text_xs()
-                    .text_color(theme.text_muted)
-                    .child("Ctrl+P"),
-            );
+        tab_row_items.push(
+            div()
+                .flex_1()
+                .h_full()
+                .border_b_1()
+                .border_color(theme.border_subtle)
+                .into_any_element(),
+        );
 
-        let top_tools = div()
-            .flex()
-            .items_center()
-            .gap_1()
-            .child(
-                div()
-                    .w(px(30.0))
-                    .h(px(26.0))
-                    .rounded_xs()
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .cursor_pointer()
-                    .hover(|s| s.bg(theme.bg_hover).text_color(theme.text_primary))
-                    .text_color(if self.show_sidebar {
-                        theme.accent
-                    } else {
-                        theme.text_muted
-                    })
-                    .bg(if self.show_sidebar {
-                        theme.bg_hover
-                    } else {
-                        theme.bg_surface
-                    })
-                    .text_xs()
-                    .child("≡")
-                    .on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(|this, _, _win, cx| {
-                            this.show_sidebar = !this.show_sidebar;
-                            cx.notify();
-                        }),
-                    ),
-            )
-            .child(
-                div()
-                    .w(px(30.0))
-                    .h(px(26.0))
-                    .rounded_xs()
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .cursor_pointer()
-                    .hover(|s| s.bg(theme.bg_hover).text_color(theme.text_primary))
-                    .text_color(if self.show_terminal {
-                        theme.accent
-                    } else {
-                        theme.text_muted
-                    })
-                    .bg(if self.show_terminal {
-                        theme.bg_hover
-                    } else {
-                        theme.bg_surface
-                    })
-                    .text_xs()
-                    .child(">_")
-                    .on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(|this, _, _win, cx| {
-                            this.toggle_terminal(cx);
-                        }),
-                    ),
-            )
-            .child(
-                div()
-                    .w(px(30.0))
-                    .h(px(26.0))
-                    .rounded_xs()
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .cursor_pointer()
-                    .hover(|s| s.bg(theme.bg_hover).text_color(theme.text_primary))
-                    .text_color(if self.show_settings {
-                        theme.accent
-                    } else {
-                        theme.text_muted
-                    })
-                    .bg(if self.show_settings {
-                        theme.bg_hover
-                    } else {
-                        theme.bg_surface
-                    })
-                    .text_xs()
-                    .child("⚙")
-                    .on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(|this, _, _win, cx| {
-                            this.show_settings = !this.show_settings;
-                            cx.notify();
-                        }),
-                    ),
-            );
-
-        // Windows 窗口控制按钮 (最小化、最大化/恢复、关闭)
-        let max_icon = if is_maximized { "⧉" } else { "□" };
-
-        let window_controls = div()
-            .flex()
-            .h_full()
-            .items_center()
-            .child(
-                div()
-                    .w(px(44.0))
-                    .h_full()
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .cursor_pointer()
-                    .text_xs()
-                    .text_color(theme.text_secondary)
-                    .hover(|s| s.bg(theme.bg_hover).text_color(theme.text_primary))
-                    .on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(|_this, _, win, _cx| {
-                            crate::window_controls::minimize_window(win);
-                        }),
-                    )
-                    .child("─"),
-            )
-            .child(
-                div()
-                    .w(px(44.0))
-                    .h_full()
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .cursor_pointer()
-                    .text_xs()
-                    .text_color(theme.text_secondary)
-                    .hover(|s| s.bg(theme.bg_hover).text_color(theme.text_primary))
-                    .on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(|_this, _, win, cx| {
-                            crate::window_controls::toggle_maximize(win);
-                            cx.notify();
-                        }),
-                    )
-                    .child(max_icon),
-            )
-            .child(
-                div()
-                    .w(px(48.0))
-                    .h_full()
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .cursor_pointer()
-                    .text_xs()
-                    .text_color(theme.text_secondary)
-                    .hover(|s| s.bg(rgb(0xe81123)).text_color(rgb(0xffffff)))
-                    .on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(|_this, _, _win, cx| {
-                            cx.quit();
-                        }),
-                    )
-                    .child("✕"),
-            );
-
-        // =========================================================================
-        // 2. Zed 风格全宽整合顶栏 (Full-width Integrated Title Bar)
-        // =========================================================================
-        let top_title_bar = div()
-            .h(px(36.0))
-            .w_full()
-            .bg(theme.bg_surface)
-            .border_b_1()
-            .border_color(theme.border_subtle)
-            .flex()
-            .items_center()
-            .pl_3()
-            .pr_0()
-            // 左侧：品牌 Logo + 应用名 + 工程目录名 (支持拖动与双击最大化/还原)
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .h_full()
-                    .gap_1p5()
-                    .cursor_default()
-                    .on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(|_this, event: &MouseDownEvent, win, cx| {
-                            if event.click_count == 2 {
-                                crate::window_controls::toggle_maximize(win);
-                                cx.notify();
-                            } else {
-                                crate::window_controls::start_window_drag(win);
-                            }
-                        }),
-                    )
-                    .child(
-                        div()
-                            .text_xs()
-                            .font_weight(FontWeight::BOLD)
-                            .text_color(theme.accent)
-                            .child("bmvp"),
-                    )
-                    .child(div().text_xs().text_color(theme.border).child("/"))
-                    .child(
-                        div()
-                            .text_xs()
-                            .text_color(theme.text_secondary)
-                            .child(project_name.clone()),
-                    ),
-            )
-            // 左侧与居中搜索胶囊之间的可拖拽区域 (支持拖动与双击最大化/还原)
-            .child(
-                div()
-                    .flex_1()
-                    .h_full()
-                    .min_w(px(20.0))
-                    .cursor_default()
-                    .on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(|_this, event: &MouseDownEvent, win, cx| {
-                            if event.click_count == 2 {
-                                crate::window_controls::toggle_maximize(win);
-                                cx.notify();
-                            } else {
-                                crate::window_controls::start_window_drag(win);
-                            }
-                        }),
-                    ),
-            )
-            // 居中快速检索胶囊 (Zed 标志性 Command Palette)
-            .child(search_pill)
-            // 搜索胶囊与右侧快捷工具之间的可拖拽区域 (支持拖动与双击最大化/还原)
-            .child(
-                div()
-                    .flex_1()
-                    .h_full()
-                    .min_w(px(20.0))
-                    .cursor_default()
-                    .on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(|_this, event: &MouseDownEvent, win, cx| {
-                            if event.click_count == 2 {
-                                crate::window_controls::toggle_maximize(win);
-                                cx.notify();
-                            } else {
-                                crate::window_controls::start_window_drag(win);
-                            }
-                        }),
-                    ),
-            )
-            // 右侧：工具项 + 分割线 + 窗口控制按钮 (最小化、最大化/还原、关闭)
-            .child(
-                div()
-                    .flex()
-                    .h_full()
-                    .items_center()
-                    .child(top_tools)
-                    .child(div().w(px(1.0)).h(px(14.0)).bg(theme.border_subtle).mx_2())
-                    .child(window_controls),
-            );
-
-        let tab_bar = div()
+        div()
             .h(px(32.0))
             .w_full()
             .bg(theme.bg_tab_bar)
-            .border_b_1()
-            .border_color(theme.border_subtle)
             .flex()
             .items_center()
-            .justify_between()
-            .px_2()
-            .child(div().flex().items_center().gap_1().children(tab_elements))
-            .child(
-                div().flex().items_center().gap_1().child(
-                    div()
-                        .w(px(24.0))
-                        .h(px(24.0))
-                        .rounded_xs()
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .cursor_pointer()
-                        .hover(|s| s.bg(theme.bg_hover).text_color(theme.text_primary))
-                        .text_color(if self.find_state.is_open {
-                            theme.accent
-                        } else {
-                            theme.text_muted
-                        })
-                        .text_xs()
-                        .child("⌕")
-                        .on_mouse_down(
-                            MouseButton::Left,
-                            cx.listener(|this, _, _win, cx| {
-                                this.open_find_bar(cx);
-                            }),
-                        ),
-                ),
-            );
+            .children(tab_row_items)
+            .into_any_element()
+    }
 
-        // =========================================================================
-        // 3. Zed 面包屑导航栏 (Breadcrumb Bar - 与代码区无缝衔接)
-        // =========================================================================
+    fn render_breadcrumb_bar(&self, cx: &mut Context<Self>) -> AnyElement {
+        let theme = &self.theme;
         let current_path_str = self
             .current_buffer()
-            .and_then(|b| b.file_path())
-            .map(|s| s.replace('\\', " › "))
-            .unwrap_or_else(|| "bmvp-text › [Untitled]".to_string());
+            .map(|b| {
+                if let Some(p) = b.file_path() {
+                    if let Some(ref root) = self.sidebar.root_path
+                        && let Ok(rel) = Path::new(p).strip_prefix(root)
+                    {
+                        return rel.to_string_lossy().replace('\\', " › ");
+                    }
+                    p.replace('\\', " › ")
+                } else {
+                    "untitled".to_string()
+                }
+            })
+            .unwrap_or_else(|| "untitled".to_string());
 
-        let breadcrumb_bar = div()
-            .h(px(22.0))
+        div()
+            .h(px(28.0))
             .w_full()
             .bg(theme.bg_editor)
             .border_b_1()
             .border_color(theme.border_subtle)
             .flex()
             .items_center()
+            .justify_between()
             .px_3()
             .child(
                 div()
@@ -1620,273 +1849,121 @@ impl Render for EditorView {
                     .items_center()
                     .gap_1p5()
                     .text_xs()
-                    .text_color(theme.text_muted)
+                    .text_color(theme.text_secondary)
                     .child(current_path_str),
-            );
+            )
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap_1()
+                    .child(
+                        div()
+                            .w(px(22.0))
+                            .h(px(20.0))
+                            .rounded_xs()
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .cursor_pointer()
+                            .hover(|s| s.bg(theme.bg_hover).text_color(theme.text_primary))
+                            .text_color(if self.find_state.is_open {
+                                theme.accent
+                            } else {
+                                theme.text_secondary
+                            })
+                            .text_xs()
+                            .child("⌕")
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(|this, _, _win, cx| {
+                                    this.open_find_bar(cx);
+                                }),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .w(px(22.0))
+                            .h(px(20.0))
+                            .rounded_xs()
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .cursor_pointer()
+                            .hover(|s| s.bg(theme.bg_hover).text_color(theme.text_primary))
+                            .text_color(if self.settings.show_line_numbers {
+                                theme.text_primary
+                            } else {
+                                theme.text_muted
+                            })
+                            .text_xs()
+                            .child("#")
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(|this, _, _win, cx| {
+                                    this.settings.show_line_numbers =
+                                        !this.settings.show_line_numbers;
+                                    this.save_config();
+                                    cx.notify();
+                                }),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .w(px(22.0))
+                            .h(px(20.0))
+                            .rounded_xs()
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .cursor_pointer()
+                            .hover(|s| s.bg(theme.bg_hover).text_color(theme.text_primary))
+                            .text_color(if self.show_terminal {
+                                theme.accent
+                            } else {
+                                theme.text_secondary
+                            })
+                            .text_xs()
+                            .child(">_")
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(|this, _, _win, cx| {
+                                    this.toggle_terminal(cx);
+                                }),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .w(px(22.0))
+                            .h(px(20.0))
+                            .rounded_xs()
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .cursor_pointer()
+                            .hover(|s| s.bg(theme.bg_hover).text_color(theme.text_primary))
+                            .text_color(theme.text_secondary)
+                            .text_xs()
+                            .child("⚙")
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(|this, _, _win, cx| {
+                                    this.toggle_settings_modal(cx);
+                                }),
+                            ),
+                    ),
+            )
+            .into_any_element()
+    }
 
-        // =========================================================================
-        // 5. 编辑区 (Editor Pane: 行号 + 语法高亮 + 选区渲染 + 光标 + 滚轮支持)
-        // =========================================================================
+    fn render_editor_pane(&self, cx: &mut Context<Self>) -> AnyElement {
+        let theme = &self.theme;
         let line_height = px(self.settings.font_size * self.settings.line_height_factor);
         let font_family = self.settings.font_family.clone();
         let show_line_numbers = self.settings.show_line_numbers;
 
-        let editor_pane = if let Some(buffer) = self.current_buffer() {
-            let cursor_pos = buffer.cursor_position();
-            let total_lines = buffer.len_lines();
-            let visible_line_count = 38;
-            let start_line = self.scroll_top;
-            let end_line = (start_line + visible_line_count).min(total_lines);
-            let lang = buffer.language();
-
-            let selection_opt = buffer.selection();
-            let char_w = self.settings.font_size * 0.6;
-            let sidebar_w = if self.show_sidebar { 230.0 } else { 0.0 };
-            let gutter_w = if show_line_numbers { 54.0 } else { 0.0 };
-            let left_offset = sidebar_w + gutter_w + 8.0;
-
-            let mut gutter_elements = Vec::new();
-            let mut line_elements = Vec::new();
-
-            for row_idx in start_line..end_line {
-                let is_cursor_line = row_idx == cursor_pos.row;
-                let line_num_str = format!("{}", row_idx + 1);
-                let gutter_col = if is_cursor_line {
-                    theme.text_primary
-                } else {
-                    theme.text_muted
-                };
-
-                if show_line_numbers {
-                    gutter_elements.push(
-                        div()
-                            .h(line_height)
-                            .flex()
-                            .items_center()
-                            .justify_end()
-                            .pr_3()
-                            .text_color(gutter_col)
-                            .cursor_pointer()
-                            .on_mouse_down(
-                                MouseButton::Left,
-                                cx.listener(move |this, _, _win, cx| {
-                                    if let Some(buf) = this.current_buffer_mut() {
-                                        let target =
-                                            buf.position_to_char(crate::buffer::Position {
-                                                row: row_idx,
-                                                col: 0,
-                                            });
-                                        buf.set_cursor(target, false);
-                                        cx.notify();
-                                    }
-                                }),
-                            )
-                            .child(line_num_str),
-                    );
-                }
-
-                let line_content = buffer
-                    .line(row_idx)
-                    .map(|s| s.to_string())
-                    .unwrap_or_default();
-                let display_text = line_content.trim_end_matches(&['\r', '\n'][..]).to_string();
-
-                let line_bg = if is_cursor_line {
-                    theme.bg_active_line
-                } else {
-                    theme.bg_editor
-                };
-
-                let mut line_box = div()
-                    .h(line_height)
-                    .w_full()
-                    .bg(line_bg)
-                    .flex()
-                    .items_center()
-                    .px_2()
-                    .cursor_text()
-                    .on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(move |this, event: &MouseDownEvent, _win, cx| {
-                            if let Some(buf) = this.current_buffer_mut() {
-                                let click_x = f32::from(event.position.x);
-                                let col = if click_x > left_offset {
-                                    ((click_x - left_offset) / char_w).round() as usize
-                                } else {
-                                    0
-                                };
-                                let target = buf.position_to_char(crate::buffer::Position {
-                                    row: row_idx,
-                                    col,
-                                });
-                                buf.set_cursor(target, event.modifiers.shift);
-                                this.terminal_focused = false;
-                                cx.notify();
-                            }
-                        }),
-                    );
-
-                let line_start_char = buffer.line_to_char(row_idx);
-                let text_chars: Vec<char> = display_text.chars().collect();
-                let line_len = text_chars.len();
-                let line_end_char = line_start_char + line_len;
-
-                // 选区检测
-                let mut sel_start_col = 0;
-                let mut sel_end_col = 0;
-                let has_sel = if let Some(sel) = selection_opt {
-                    if !sel.is_empty() {
-                        let r = sel.range();
-                        if r.start < line_end_char && r.end > line_start_char {
-                            sel_start_col = r.start.saturating_sub(line_start_char).min(line_len);
-                            sel_end_col = r.end.saturating_sub(line_start_char).min(line_len);
-                            sel_start_col < sel_end_col
-                        } else {
-                            false
-                        }
-                    } else {
-                        false
-                    }
-                } else {
-                    false
-                };
-
-                // 光标与语法高亮渲染
-                if is_cursor_line {
-                    let col = cursor_pos.col.min(line_len);
-                    let before: String = text_chars[..col].iter().collect();
-                    let cursor_char: String = if col < line_len {
-                        text_chars[col].to_string()
-                    } else {
-                        " ".to_string()
-                    };
-                    let after: String = if col < line_len {
-                        text_chars[(col + 1)..].iter().collect()
-                    } else {
-                        String::new()
-                    };
-
-                    let before_tokens = highlight_line(&before, lang);
-                    let mut before_divs = Vec::new();
-                    for tok in before_tokens {
-                        before_divs.push(
-                            div()
-                                .text_color(token_color(tok.token_type, theme))
-                                .child(tok.text),
-                        );
-                    }
-
-                    let after_tokens = highlight_line(&after, lang);
-                    let mut after_divs = Vec::new();
-                    for tok in after_tokens {
-                        after_divs.push(
-                            div()
-                                .text_color(token_color(tok.token_type, theme))
-                                .child(tok.text),
-                        );
-                    }
-
-                    line_box = line_box
-                        .children(before_divs)
-                        .child(
-                            div()
-                                .bg(theme.cursor_color)
-                                .text_color(rgb(0x09090b))
-                                .rounded_xs()
-                                .child(cursor_char),
-                        )
-                        .children(after_divs);
-                } else if display_text.is_empty() {
-                    line_box = line_box.child(" ");
-                } else if has_sel {
-                    let before_sel: String = text_chars[..sel_start_col].iter().collect();
-                    let in_sel: String = text_chars[sel_start_col..sel_end_col].iter().collect();
-                    let after_sel: String = text_chars[sel_end_col..].iter().collect();
-
-                    let sel_bg = theme.selection;
-
-                    line_box = line_box
-                        .child(div().text_color(theme.text_primary).child(before_sel))
-                        .child(
-                            div()
-                                .bg(sel_bg)
-                                .rounded_xs()
-                                .text_color(theme.text_primary)
-                                .child(in_sel),
-                        )
-                        .child(div().text_color(theme.text_primary).child(after_sel));
-                } else {
-                    let tokens = highlight_line(&display_text, lang);
-                    let mut tok_divs = Vec::new();
-                    for tok in tokens {
-                        tok_divs.push(
-                            div()
-                                .text_color(token_color(tok.token_type, theme))
-                                .child(tok.text),
-                        );
-                    }
-                    line_box = line_box.children(tok_divs);
-                }
-
-                line_elements.push(line_box);
-            }
-
-            let gutter_div = if show_line_numbers {
-                Some(
-                    div()
-                        .w(px(54.0))
-                        .h_full()
-                        .bg(theme.bg_gutter)
-                        .border_r_1()
-                        .border_color(theme.border_subtle)
-                        .py_2()
-                        .font_family(font_family.clone())
-                        .children(gutter_elements),
-                )
-            } else {
-                None
-            };
-
-            let find_overlay = if self.find_state.is_open {
-                Some(self.find_state.render(theme, cx))
-            } else {
-                None
-            };
-
-            div()
-                .flex_1()
-                .relative()
-                .flex()
-                .bg(theme.bg_editor)
-                .overflow_hidden()
-                .on_scroll_wheel(cx.listener(|this, event: &ScrollWheelEvent, _win, cx| {
-                    let delta_y = match event.delta {
-                        ScrollDelta::Pixels(p) => (p.y / px(20.0)) as i32,
-                        ScrollDelta::Lines(l) => l.y as i32,
-                    };
-                    if delta_y < 0 {
-                        // 向上滚动
-                        this.scroll_top = this
-                            .scroll_top
-                            .saturating_add(delta_y.unsigned_abs() as usize);
-                    } else if delta_y > 0 {
-                        // 向下滚动
-                        this.scroll_top = this.scroll_top.saturating_sub(delta_y as usize);
-                    }
-                    cx.notify();
-                }))
-                .children(gutter_div)
-                .child(
-                    div()
-                        .flex_1()
-                        .h_full()
-                        .py_2()
-                        .font_family(font_family)
-                        .children(line_elements),
-                )
-                .children(find_overlay)
-        } else {
-            div()
+        let Some(buffer) = self.current_buffer() else {
+            return div()
                 .flex_1()
                 .flex()
                 .items_center()
@@ -1894,414 +1971,826 @@ impl Render for EditorView {
                 .bg(theme.bg_editor)
                 .text_color(theme.text_muted)
                 .child("No Open Files — Press Ctrl+P to Open")
+                .into_any_element();
         };
 
-        // =========================================================================
-        // 6. 底部系统原生命令行 Dock (Native Windows Command Prompt Dock)
-        // =========================================================================
-        let bottom_terminal = if self.show_terminal && !self.terminals.is_empty() {
-            let active_idx = self
-                .active_terminal
-                .min(self.terminals.len().saturating_sub(1));
-            let term = &self.terminals[active_idx];
-            let term_font = "Consolas".to_string();
-            let term_size = px(13.0);
-            let prompt = term.current_prompt();
-            let is_focused = self.terminal_focused;
+        let cursor_pos = buffer.cursor_position();
+        let total_lines = buffer.len_lines();
+        let visible_line_count = 38;
+        let start_line = self.scroll_top;
+        let end_line = (start_line + visible_line_count).min(total_lines);
+        let lang = buffer.language();
 
-            let lines = term.lines();
-            let visible_count = (((self.terminal_height - 38.0) / 18.0) as usize).clamp(5, 500);
-            let total = lines.len();
-            let effective_end = total.saturating_sub(term.scroll_offset);
-            let start = effective_end.saturating_sub(visible_count);
-            let slice = if effective_end > 0 && start < total {
-                &lines[start..effective_end.min(total)]
-            } else if total > 0 && term.scroll_offset > 0 {
-                &lines[0..visible_count.min(total)]
+        let selection_opt = buffer.selection();
+        let char_w = self.settings.font_size * 0.6;
+        let sidebar_w = if self.show_sidebar {
+            self.sidebar_width + 2.0
+        } else {
+            0.0
+        };
+        let gutter_w = if show_line_numbers { 54.0 } else { 0.0 };
+        let left_offset = sidebar_w + gutter_w + 8.0;
+
+        let mut gutter_elements = Vec::new();
+        let mut line_elements = Vec::new();
+
+        for row_idx in start_line..end_line {
+            let is_cursor_line = row_idx == cursor_pos.row;
+            let line_num_str = format!("{}", row_idx + 1);
+            let gutter_col = if is_cursor_line {
+                theme.text_primary
             } else {
-                let start_idx = total.saturating_sub(visible_count);
-                &lines[start_idx..]
+                theme.text_muted
+            };
+            let gutter_bg = if is_cursor_line {
+                theme.bg_active_line
+            } else {
+                theme.bg_gutter
             };
 
-            let mut output_divs = Vec::new();
-            for line in slice {
-                output_divs.push(
+            if show_line_numbers {
+                gutter_elements.push(
                     div()
-                        .w_full()
-                        .text_color(rgb(0xcccccc)) // 经典系统命令行白灰色
-                        .font_family(term_font.clone())
-                        .text_size(term_size)
-                        .child(if line.is_empty() {
-                            " ".to_string()
-                        } else {
-                            line.clone()
-                        }),
-                );
-            }
-
-            // 当前交互输入行 (与系统命令行一致，直接跟随在输出末尾)
-            if term.scroll_offset == 0 {
-                let chars: Vec<char> = term.input_buffer.chars().collect();
-                let c_idx = term.cursor_pos.min(chars.len());
-                let before_text: String = chars[..c_idx].iter().collect();
-                let after_text: String = chars[c_idx..].iter().collect();
-
-                output_divs.push(
-                    div()
-                        .w_full()
+                        .h(line_height)
+                        .bg(gutter_bg)
                         .flex()
                         .items_center()
-                        .font_family(term_font.clone())
-                        .text_size(term_size)
-                        .child(
-                            div()
-                                .text_color(rgb(0xcccccc))
-                                .child(format!("{} ", prompt)),
-                        )
-                        .child(div().text_color(rgb(0xffffff)).child(before_text))
-                        .child(div().w(px(7.0)).h(px(13.0)).bg(if is_focused {
-                            rgb(0xcccccc)
-                        } else {
-                            rgb(0x555555)
-                        }))
-                        .child(div().text_color(rgb(0xffffff)).child(after_text)),
-                );
-            }
-
-            // 构造多命令行 Tab 标签
-            let mut tab_divs = Vec::new();
-            for (idx, t) in self.terminals.iter().enumerate() {
-                let is_cur = idx == active_idx;
-                let status_icon = if t.is_running { "● " } else { ">_ " };
-                let status_color = if t.is_running {
-                    rgb(0xfacc15)
-                } else if is_cur {
-                    rgb(0xffffff)
-                } else {
-                    rgb(0xa1a1aa)
-                };
-                tab_divs.push(
-                    div()
-                        .h(px(22.0))
-                        .px_2()
-                        .rounded_xs()
-                        .flex()
-                        .items_center()
-                        .gap_1p5()
+                        .justify_end()
+                        .pr_3()
+                        .text_color(gutter_col)
                         .cursor_pointer()
-                        .bg(if is_cur { rgb(0x27272a) } else { rgb(0x18181b) })
-                        .hover(|s| s.bg(rgb(0x27272a)))
-                        .text_xs()
-                        .text_color(if is_cur { rgb(0xffffff) } else { rgb(0xa1a1aa) })
-                        .child(
-                            div()
-                                .flex()
-                                .items_center()
-                                .child(div().text_color(status_color).child(status_icon))
-                                .child(t.title.clone()),
-                        )
-                        .child(
-                            div()
-                                .w(px(14.0))
-                                .h(px(14.0))
-                                .rounded_xs()
-                                .flex()
-                                .items_center()
-                                .justify_center()
-                                .hover(|s| s.bg(rgb(0x3f3f46)).text_color(theme.error))
-                                .child("×")
-                                .on_mouse_down(
-                                    MouseButton::Left,
-                                    cx.listener(move |this, _, _win, cx| {
-                                        this.close_terminal_tab(idx, cx);
-                                    }),
-                                ),
-                        )
                         .on_mouse_down(
                             MouseButton::Left,
                             cx.listener(move |this, _, _win, cx| {
-                                this.active_terminal = idx;
-                                this.terminal_focused = true;
-                                cx.notify();
+                                if let Some(buf) = this.current_buffer_mut() {
+                                    let target = buf.position_to_char(crate::buffer::Position {
+                                        row: row_idx,
+                                        col: 0,
+                                    });
+                                    buf.set_cursor(target, false);
+                                    cx.notify();
+                                }
                             }),
-                        ),
+                        )
+                        .child(line_num_str)
+                        .into_any_element(),
                 );
             }
 
-            Some(
-                div()
-                    .h(px(self.terminal_height))
-                    .w_full()
-                    .bg(rgb(0x0c0c0c)) // 纯正系统命令行黑色背景
-                    .flex()
-                    .flex_col()
-                    .on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(|this, _, _win, cx| {
-                            this.terminal_focused = true;
-                            cx.notify();
-                        }),
-                    )
-                    .on_scroll_wheel(cx.listener(|this, event: &ScrollWheelEvent, _win, cx| {
-                        let delta_y = match event.delta {
-                            ScrollDelta::Pixels(p) => (p.y / px(20.0)) as i32,
-                            ScrollDelta::Lines(l) => l.y as i32,
-                        };
-                        if let Some(t) = this.current_terminal_mut() {
-                            if delta_y < 0 {
-                                t.scroll_up(3);
-                            } else if delta_y > 0 {
-                                t.scroll_down(3);
-                            }
+            let line_content = buffer
+                .line(row_idx)
+                .map(|s| s.to_string())
+                .unwrap_or_default();
+            let display_text = line_content.trim_end_matches(&['\r', '\n'][..]).to_string();
+
+            let line_bg = if is_cursor_line {
+                theme.bg_active_line
+            } else {
+                theme.bg_editor
+            };
+
+            let mut line_box = div()
+                .h(line_height)
+                .w_full()
+                .bg(line_bg)
+                .flex()
+                .items_center()
+                .px_2()
+                .cursor_text()
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(move |this, event: &MouseDownEvent, _win, cx| {
+                        if let Some(buf) = this.current_buffer_mut() {
+                            let click_x = f32::from(event.position.x);
+                            let col = if click_x > left_offset {
+                                ((click_x - left_offset) / char_w).round() as usize
+                            } else {
+                                0
+                            };
+                            let target =
+                                buf.position_to_char(crate::buffer::Position { row: row_idx, col });
+                            buf.set_cursor(target, event.modifiers.shift);
+                            this.terminal_focused = false;
                             cx.notify();
                         }
-                    }))
-                    // 命令行顶部控制栏 (多Tab标签 + 快捷操作)
+                    }),
+                );
+
+            let line_start_char = buffer.line_to_char(row_idx);
+            let text_chars: Vec<char> = display_text.chars().collect();
+            let line_len = text_chars.len();
+            let line_end_char = line_start_char + line_len;
+
+            let mut sel_start_col = 0;
+            let mut sel_end_col = 0;
+            let has_sel = if let Some(sel) = selection_opt {
+                if !sel.is_empty() {
+                    let r = sel.range();
+                    if r.start < line_end_char && r.end > line_start_char {
+                        sel_start_col = r.start.saturating_sub(line_start_char).min(line_len);
+                        sel_end_col = r.end.saturating_sub(line_start_char).min(line_len);
+                        sel_start_col < sel_end_col
+                    } else {
+                        false
+                    }
+                } else {
+                    false
+                }
+            } else {
+                false
+            };
+
+            if is_cursor_line {
+                let col = cursor_pos.col.min(line_len);
+                let before: String = text_chars[..col].iter().collect();
+                let cursor_char: String = if col < line_len {
+                    text_chars[col].to_string()
+                } else {
+                    " ".to_string()
+                };
+                let after: String = if col < line_len {
+                    text_chars[(col + 1)..].iter().collect()
+                } else {
+                    String::new()
+                };
+
+                let before_divs: Vec<AnyElement> = highlight_line(&before, lang)
+                    .into_iter()
+                    .map(|tok| {
+                        div()
+                            .text_color(token_color(tok.token_type, theme))
+                            .child(tok.text)
+                            .into_any_element()
+                    })
+                    .collect();
+
+                let after_divs: Vec<AnyElement> = highlight_line(&after, lang)
+                    .into_iter()
+                    .map(|tok| {
+                        div()
+                            .text_color(token_color(tok.token_type, theme))
+                            .child(tok.text)
+                            .into_any_element()
+                    })
+                    .collect();
+
+                line_box = line_box
+                    .children(before_divs)
                     .child(
                         div()
-                            .h(px(28.0))
-                            .w_full()
-                            .bg(rgb(0x18181b))
-                            .border_b_1()
-                            .border_color(rgb(0x27272a))
-                            .flex()
-                            .items_center()
-                            .justify_between()
-                            .px_2()
-                            // 左侧：Tabs 列表 + 新建 Tab 按钮 "+"
-                            .child(
-                                div()
-                                    .flex()
-                                    .items_center()
-                                    .gap_1()
-                                    .children(tab_divs)
-                                    .child(
-                                        div()
-                                            .w(px(20.0))
-                                            .h(px(20.0))
-                                            .rounded_xs()
-                                            .flex()
-                                            .items_center()
-                                            .justify_center()
-                                            .cursor_pointer()
-                                            .text_xs()
-                                            .text_color(rgb(0xa1a1aa))
-                                            .hover(|s| {
-                                                s.bg(rgb(0x27272a)).text_color(rgb(0xffffff))
-                                            })
-                                            .child("+")
-                                            .on_mouse_down(
-                                                MouseButton::Left,
-                                                cx.listener(|this, _, _win, cx| {
-                                                    this.new_terminal_tab(cx);
-                                                }),
-                                            ),
-                                    ),
-                            )
-                            // 右侧：状态指示、终止按钮、工作路径、重载Profile、独立系统终端、清屏、关闭
-                            .child(
-                                div()
-                                    .flex()
-                                    .items_center()
-                                    .gap_1p5()
-                                    .child(if self.terminals[active_idx].is_running {
-                                        div()
-                                            .px_1p5()
-                                            .py_0p5()
-                                            .rounded_xs()
-                                            .bg(rgb(0x854d0e))
-                                            .text_xs()
-                                            .text_color(rgb(0xfef08a))
-                                            .child("● running")
-                                    } else {
-                                        div()
-                                            .px_1p5()
-                                            .py_0p5()
-                                            .rounded_xs()
-                                            .bg(rgb(0x27272a))
-                                            .text_xs()
-                                            .text_color(rgb(0x4ade80))
-                                            .child("● ready")
-                                    })
-                                    .child(if self.terminals[active_idx].is_running {
-                                        div()
-                                            .h(px(20.0))
-                                            .px_2()
-                                            .rounded_xs()
-                                            .bg(rgb(0xef4444))
-                                            .text_color(rgb(0xffffff))
-                                            .text_xs()
-                                            .flex()
-                                            .items_center()
-                                            .cursor_pointer()
-                                            .child("■ 终止")
-                                            .on_mouse_down(
-                                                MouseButton::Left,
-                                                cx.listener(|this, _, _win, cx| {
-                                                    if let Some(t) = this.current_terminal_mut() {
-                                                        t.interrupt();
-                                                    }
-                                                    cx.notify();
-                                                }),
-                                            )
-                                    } else {
-                                        div()
-                                    })
-                                    .child(
-                                        div()
-                                            .px_1p5()
-                                            .py_0p5()
-                                            .rounded_xs()
-                                            .bg(rgb(0x202024))
-                                            .text_xs()
-                                            .text_color(rgb(0x71717a))
-                                            .child({
-                                                let dir_name = self.terminals[active_idx]
-                                                    .current_dir
-                                                    .file_name()
-                                                    .map(|s| s.to_string_lossy().to_string())
-                                                    .unwrap_or_else(|| {
-                                                        self.terminals[active_idx]
-                                                            .current_dir
-                                                            .display()
-                                                            .to_string()
-                                                    });
-                                                format!("~ / {}", dir_name)
-                                            }),
-                                    )
-                                    .child(if self.terminals[active_idx].scroll_offset > 0 {
-                                        div()
-                                            .h(px(20.0))
-                                            .px_2()
-                                            .rounded_xs()
-                                            .bg(theme.accent)
-                                            .text_color(rgb(0xffffff))
-                                            .text_xs()
-                                            .flex()
-                                            .items_center()
-                                            .cursor_pointer()
-                                            .child("↓ Latest")
-                                            .on_mouse_down(
-                                                MouseButton::Left,
-                                                cx.listener(|this, _, _win, cx| {
-                                                    if let Some(t) = this.current_terminal_mut() {
-                                                        t.scroll_to_bottom();
-                                                    }
-                                                    cx.notify();
-                                                }),
-                                            )
-                                    } else {
-                                        div()
-                                    })
-                                    .child(
-                                        div()
-                                            .h(px(20.0))
-                                            .px_2()
-                                            .rounded_xs()
-                                            .cursor_pointer()
-                                            .text_xs()
-                                            .text_color(rgb(0xa1a1aa))
-                                            .hover(|s| {
-                                                s.bg(rgb(0x27272a)).text_color(rgb(0xffffff))
-                                            })
-                                            .child("⟳ 重载")
-                                            .on_mouse_down(
-                                                MouseButton::Left,
-                                                cx.listener(|this, _, _win, cx| {
-                                                    this.restart_terminal();
-                                                    cx.notify();
-                                                }),
-                                            ),
-                                    )
-                                    .child(
-                                        div()
-                                            .h(px(20.0))
-                                            .px_2()
-                                            .rounded_xs()
-                                            .cursor_pointer()
-                                            .text_xs()
-                                            .text_color(rgb(0xa1a1aa))
-                                            .hover(|s| {
-                                                s.bg(rgb(0x27272a)).text_color(rgb(0xffffff))
-                                            })
-                                            .child("↗ 外部终端")
-                                            .on_mouse_down(
-                                                MouseButton::Left,
-                                                cx.listener(|this, _, _win, _cx| {
-                                                    if let Some(t) = this.current_terminal() {
-                                                        t.open_external();
-                                                    }
-                                                }),
-                                            ),
-                                    )
-                                    .child(
-                                        div()
-                                            .h(px(20.0))
-                                            .px_2()
-                                            .rounded_xs()
-                                            .cursor_pointer()
-                                            .text_xs()
-                                            .text_color(rgb(0xa1a1aa))
-                                            .hover(|s| {
-                                                s.bg(rgb(0x27272a)).text_color(rgb(0xffffff))
-                                            })
-                                            .child("⌫ 清屏")
-                                            .on_mouse_down(
-                                                MouseButton::Left,
-                                                cx.listener(|this, _, _win, cx| {
-                                                    if let Some(t) = this.current_terminal_mut() {
-                                                        t.clear();
-                                                    }
-                                                    cx.notify();
-                                                }),
-                                            ),
-                                    )
-                                    .child(
-                                        div()
-                                            .w(px(20.0))
-                                            .h(px(20.0))
-                                            .rounded_xs()
-                                            .flex()
-                                            .items_center()
-                                            .justify_center()
-                                            .cursor_pointer()
-                                            .text_xs()
-                                            .text_color(rgb(0xa1a1aa))
-                                            .hover(|s| s.bg(rgb(0x27272a)).text_color(theme.error))
-                                            .child("✕")
-                                            .on_mouse_down(
-                                                MouseButton::Left,
-                                                cx.listener(|this, _, _win, cx| {
-                                                    this.close_terminal_dock(cx);
-                                                }),
-                                            ),
-                                    ),
-                            ),
+                            .bg(theme.cursor_color)
+                            .text_color(theme.text_on_accent)
+                            .rounded_xs()
+                            .child(cursor_char),
                     )
-                    // 命令行输出与当前行容器 (纯正黑色背景，等宽 Consolas 字体)
+                    .children(after_divs);
+            } else if display_text.is_empty() {
+                line_box = line_box.child(" ");
+            } else if has_sel {
+                let before_sel: String = text_chars[..sel_start_col].iter().collect();
+                let in_sel: String = text_chars[sel_start_col..sel_end_col].iter().collect();
+                let after_sel: String = text_chars[sel_end_col..].iter().collect();
+
+                line_box = line_box
+                    .child(div().text_color(theme.text_primary).child(before_sel))
                     .child(
                         div()
-                            .flex_1()
-                            .overflow_hidden()
-                            .p_2()
-                            .bg(rgb(0x0c0c0c))
-                            .children(output_divs),
-                    ),
+                            .bg(theme.selection)
+                            .rounded_xs()
+                            .text_color(theme.text_primary)
+                            .child(in_sel),
+                    )
+                    .child(div().text_color(theme.text_primary).child(after_sel));
+            } else {
+                let tok_divs: Vec<AnyElement> = highlight_line(&display_text, lang)
+                    .into_iter()
+                    .map(|tok| {
+                        div()
+                            .text_color(token_color(tok.token_type, theme))
+                            .child(tok.text)
+                            .into_any_element()
+                    })
+                    .collect();
+                line_box = line_box.children(tok_divs);
+            }
+
+            line_elements.push(line_box.into_any_element());
+        }
+
+        let gutter_div = if show_line_numbers {
+            Some(
+                div()
+                    .w(px(54.0))
+                    .h_full()
+                    .bg(theme.bg_gutter)
+                    .py_1()
+                    .font_family(font_family.clone())
+                    .children(gutter_elements)
+                    .into_any_element(),
             )
         } else {
             None
         };
 
-        // 编辑区与底部命令行的横向拖拽分割把手 (Horizontal Resizer Splitter)
-        let terminal_resizer = if self.show_terminal {
-            let is_resizing = self.resizing_terminal;
-            let is_focused = self.terminal_focused;
+        let find_overlay = if self.find_state.is_open {
+            Some(self.find_state.render(theme, cx).into_any_element())
+        } else {
+            None
+        };
+
+        div()
+            .flex_1()
+            .relative()
+            .flex()
+            .bg(theme.bg_editor)
+            .overflow_hidden()
+            .on_scroll_wheel(cx.listener(|this, event: &ScrollWheelEvent, _win, cx| {
+                let delta_y = match event.delta {
+                    ScrollDelta::Pixels(p) => (p.y / px(20.0)) as i32,
+                    ScrollDelta::Lines(l) => l.y as i32,
+                };
+                if delta_y < 0 {
+                    this.scroll_top = this
+                        .scroll_top
+                        .saturating_add(delta_y.unsigned_abs() as usize);
+                } else if delta_y > 0 {
+                    this.scroll_top = this.scroll_top.saturating_sub(delta_y as usize);
+                }
+                cx.notify();
+            }))
+            .children(gutter_div)
+            .child(
+                div()
+                    .flex_1()
+                    .h_full()
+                    .py_1()
+                    .font_family(font_family)
+                    .children(line_elements),
+            )
+            .children(find_overlay)
+            .into_any_element()
+    }
+
+    fn render_terminal_dock(&self, cx: &mut Context<Self>) -> AnyElement {
+        let theme = &self.theme;
+        let active_idx = self
+            .active_terminal
+            .min(self.terminals.len().saturating_sub(1));
+        let term = &self.terminals[active_idx];
+        let term_font = self.settings.terminal_font_family.clone();
+        let term_size = px(self.settings.terminal_font_size);
+        let line_h = (self.settings.terminal_font_size * 1.45).ceil().max(20.0);
+        let is_focused = self.terminal_focused;
+        let is_light = theme.is_light();
+
+        let prompt_lines = term.active_prompt_lines();
+        let input_rows = if term.scroll_offset == 0 {
+            if term.is_running {
+                1
+            } else {
+                prompt_lines.len().max(1)
+            }
+        } else {
+            0
+        };
+
+        let avail_h = (self.terminal_height - 28.0 - 20.0).max(line_h);
+        let max_rows = (avail_h / line_h).floor().max(1.0) as usize;
+        let visible_count = max_rows.saturating_sub(input_rows);
+
+        let lines = term.lines();
+        let total = lines.len();
+        let effective_end = total.saturating_sub(term.scroll_offset);
+        let start = effective_end.saturating_sub(visible_count);
+        let slice = if visible_count == 0 {
+            &lines[0..0]
+        } else if effective_end > 0 && start < total {
+            &lines[start..effective_end.min(total)]
+        } else if total > 0 && term.scroll_offset > 0 {
+            &lines[0..visible_count.min(total)]
+        } else {
+            let start_idx = total.saturating_sub(visible_count);
+            &lines[start_idx..]
+        };
+
+        let build_span_els = |raw: &str, default_fg: Hsla| -> Vec<AnyElement> {
+            parse_ansi_spans(raw, is_light)
+                .into_iter()
+                .map(|sp| {
+                    let fg = sp.fg_rgb.map(|c| rgb(c).into()).unwrap_or(default_fg);
+                    let mut el = div().text_color(fg).child(sp.text);
+                    if let Some(bg) = sp.bg_rgb {
+                        el = el.bg(rgb(bg));
+                    }
+                    el.into_any_element()
+                })
+                .collect()
+        };
+
+        let mut output_divs: Vec<AnyElement> = slice
+            .iter()
+            .map(|line| {
+                let span_els = build_span_els(line, theme.text_primary);
+                if span_els.is_empty() {
+                    div()
+                        .w_full()
+                        .h(px(line_h))
+                        .overflow_hidden()
+                        .whitespace_nowrap()
+                        .flex()
+                        .items_center()
+                        .text_color(theme.text_primary)
+                        .font_family(term_font.clone())
+                        .text_size(term_size)
+                        .child(" ")
+                        .into_any_element()
+                } else {
+                    div()
+                        .w_full()
+                        .h(px(line_h))
+                        .overflow_hidden()
+                        .whitespace_nowrap()
+                        .flex()
+                        .items_center()
+                        .font_family(term_font.clone())
+                        .text_size(term_size)
+                        .children(span_els)
+                        .into_any_element()
+                }
+            })
+            .collect();
+
+        if term.scroll_offset == 0 {
+            let chars: Vec<char> = term.input_buffer.chars().collect();
+            let c_idx = term.cursor_pos.min(chars.len());
+            let before_text: String = chars[..c_idx].iter().collect();
+            let after_text: String = chars[c_idx..].iter().collect();
+            let cursor_box = div()
+                .w(px(7.0))
+                .h(px((self.settings.terminal_font_size + 1.0).max(13.0)))
+                .bg(if is_focused {
+                    theme.cursor_color
+                } else {
+                    theme.text_muted
+                });
+
+            if term.is_running {
+                output_divs.push(
+                    div()
+                        .w_full()
+                        .h(px(line_h))
+                        .overflow_hidden()
+                        .whitespace_nowrap()
+                        .flex()
+                        .items_center()
+                        .font_family(term_font.clone())
+                        .text_size(term_size)
+                        .child(div().text_color(theme.text_primary).child(before_text))
+                        .child(cursor_box)
+                        .child(div().text_color(theme.text_primary).child(after_text))
+                        .into_any_element(),
+                );
+            } else {
+                let last_idx = prompt_lines.len().saturating_sub(1);
+                for p_line in &prompt_lines[..last_idx] {
+                    let span_els = build_span_els(p_line, theme.text_secondary);
+                    output_divs.push(
+                        div()
+                            .w_full()
+                            .h(px(line_h))
+                            .overflow_hidden()
+                            .whitespace_nowrap()
+                            .flex()
+                            .items_center()
+                            .font_family(term_font.clone())
+                            .text_size(term_size)
+                            .children(span_els)
+                            .into_any_element(),
+                    );
+                }
+
+                let last_prompt = prompt_lines.last().map(String::as_str).unwrap_or("");
+                let prompt_els = build_span_els(last_prompt, theme.text_secondary);
+                output_divs.push(
+                    div()
+                        .w_full()
+                        .h(px(line_h))
+                        .overflow_hidden()
+                        .whitespace_nowrap()
+                        .flex()
+                        .items_center()
+                        .font_family(term_font.clone())
+                        .text_size(term_size)
+                        .children(prompt_els)
+                        .child(div().text_color(theme.text_primary).child(before_text))
+                        .child(cursor_box)
+                        .child(div().text_color(theme.text_primary).child(after_text))
+                        .into_any_element(),
+                );
+            }
+        }
+
+        let mut tab_divs: Vec<AnyElement> = Vec::new();
+        for (idx, t) in self.terminals.iter().enumerate() {
+            let is_cur = idx == active_idx;
+            let status_icon = if t.is_running { "● " } else { ">_ " };
+            let status_color = if t.is_running {
+                theme.dirty_indicator
+            } else if is_cur {
+                theme.text_primary
+            } else {
+                theme.text_muted
+            };
+
+            let mut term_tab = div()
+                .h_full()
+                .px_3()
+                .flex()
+                .items_center()
+                .gap_1p5()
+                .cursor_pointer()
+                .bg(if is_cur {
+                    theme.bg_terminal
+                } else {
+                    theme.bg_tab_bar
+                })
+                .hover(|s| {
+                    s.bg(if is_cur {
+                        theme.bg_terminal
+                    } else {
+                        theme.bg_hover
+                    })
+                })
+                .text_xs()
+                .text_color(if is_cur {
+                    theme.text_primary
+                } else {
+                    theme.text_secondary
+                })
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .child(div().text_color(status_color).child(status_icon))
+                        .child(t.title.clone()),
+                )
+                .child(
+                    div()
+                        .w(px(14.0))
+                        .h(px(14.0))
+                        .rounded_xs()
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .text_color(theme.text_muted)
+                        .hover(|s| s.bg(theme.bg_hover).text_color(theme.error))
+                        .child("×")
+                        .on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(move |this, _, _win, cx| {
+                                this.close_terminal_tab(idx, cx);
+                            }),
+                        ),
+                )
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(move |this, _, _win, cx| {
+                        this.active_terminal = idx;
+                        this.terminal_focused = true;
+                        cx.notify();
+                    }),
+                );
+
+            if is_cur {
+                term_tab = term_tab
+                    .border_t_1()
+                    .border_l_1()
+                    .border_r_1()
+                    .border_color(theme.border_subtle);
+            } else {
+                term_tab = term_tab
+                    .border_b_1()
+                    .border_r_1()
+                    .border_color(theme.border_subtle);
+            }
+
+            tab_divs.push(term_tab.into_any_element());
+        }
+
+        let dir_name = self.terminals[active_idx]
+            .current_dir
+            .file_name()
+            .map(|s| s.to_string_lossy().to_string())
+            .unwrap_or_else(|| self.terminals[active_idx].current_dir.display().to_string());
+
+        let header = div()
+            .h(px(28.0))
+            .w_full()
+            .bg(theme.bg_tab_bar)
+            .flex()
+            .items_center()
+            .child(div().h_full().flex().items_center().children(tab_divs))
+            .child(
+                div()
+                    .h_full()
+                    .px_2()
+                    .border_b_1()
+                    .border_color(theme.border_subtle)
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .cursor_pointer()
+                    .text_xs()
+                    .text_color(theme.text_secondary)
+                    .hover(|s| s.bg(theme.bg_hover).text_color(theme.text_primary))
+                    .child("+")
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(|this, _, _win, cx| {
+                            this.new_terminal_tab(cx);
+                        }),
+                    ),
+            )
+            .child(
+                div()
+                    .flex_1()
+                    .h_full()
+                    .border_b_1()
+                    .border_color(theme.border_subtle),
+            )
+            .child(
+                div()
+                    .h_full()
+                    .px_2()
+                    .border_b_1()
+                    .border_color(theme.border_subtle)
+                    .flex()
+                    .items_center()
+                    .gap_1p5()
+                    .child(if self.terminals[active_idx].is_running {
+                        div()
+                            .px_1p5()
+                            .py_0p5()
+                            .rounded_xs()
+                            .bg(theme.bg_hover)
+                            .text_xs()
+                            .text_color(theme.dirty_indicator)
+                            .child("● running")
+                    } else {
+                        div()
+                            .px_1p5()
+                            .py_0p5()
+                            .rounded_xs()
+                            .text_xs()
+                            .text_color(theme.text_muted)
+                            .child(format!("~/{}", dir_name))
+                    })
+                    .child(if self.terminals[active_idx].is_running {
+                        div()
+                            .h(px(20.0))
+                            .px_2()
+                            .rounded_xs()
+                            .bg(theme.error)
+                            .text_color(rgb(0xffffff))
+                            .text_xs()
+                            .flex()
+                            .items_center()
+                            .cursor_pointer()
+                            .child("■ Stop")
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(|this, _, _win, cx| {
+                                    if let Some(t) = this.current_terminal_mut() {
+                                        t.interrupt();
+                                    }
+                                    cx.notify();
+                                }),
+                            )
+                    } else {
+                        div()
+                    })
+                    .child(if self.terminals[active_idx].scroll_offset > 0 {
+                        div()
+                            .h(px(20.0))
+                            .px_2()
+                            .rounded_xs()
+                            .bg(theme.accent)
+                            .text_color(theme.text_on_accent)
+                            .text_xs()
+                            .flex()
+                            .items_center()
+                            .cursor_pointer()
+                            .child("↓ Latest")
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(|this, _, _win, cx| {
+                                    if let Some(t) = this.current_terminal_mut() {
+                                        t.scroll_to_bottom();
+                                    }
+                                    cx.notify();
+                                }),
+                            )
+                    } else {
+                        div()
+                    })
+                    .child(
+                        div()
+                            .w(px(20.0))
+                            .h(px(20.0))
+                            .rounded_xs()
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .cursor_pointer()
+                            .text_xs()
+                            .text_color(theme.text_secondary)
+                            .hover(|s| s.bg(theme.bg_hover).text_color(theme.text_primary))
+                            .child("⟳")
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(|this, _, _win, cx| {
+                                    this.restart_terminal();
+                                    cx.notify();
+                                }),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .w(px(20.0))
+                            .h(px(20.0))
+                            .rounded_xs()
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .cursor_pointer()
+                            .text_xs()
+                            .text_color(theme.text_secondary)
+                            .hover(|s| s.bg(theme.bg_hover).text_color(theme.text_primary))
+                            .child("↗")
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(|this, _, _win, _cx| {
+                                    if let Some(t) = this.current_terminal() {
+                                        t.open_external();
+                                    }
+                                }),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .w(px(20.0))
+                            .h(px(20.0))
+                            .rounded_xs()
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .cursor_pointer()
+                            .text_xs()
+                            .text_color(theme.text_secondary)
+                            .hover(|s| s.bg(theme.bg_hover).text_color(theme.text_primary))
+                            .child("⌫")
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(|this, _, _win, cx| {
+                                    if let Some(t) = this.current_terminal_mut() {
+                                        t.clear();
+                                    }
+                                    cx.notify();
+                                }),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .w(px(20.0))
+                            .h(px(20.0))
+                            .rounded_xs()
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .cursor_pointer()
+                            .text_xs()
+                            .text_color(theme.text_secondary)
+                            .hover(|s| s.bg(theme.bg_hover).text_color(theme.error))
+                            .child("✕")
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(|this, _, _win, cx| {
+                                    this.close_terminal_dock(cx);
+                                }),
+                            ),
+                    ),
+            )
+            .into_any_element();
+
+        div()
+            .h(px(self.terminal_height))
+            .w_full()
+            .bg(theme.bg_terminal)
+            .flex()
+            .flex_col()
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|this, _, _win, cx| {
+                    this.terminal_focused = true;
+                    cx.notify();
+                }),
+            )
+            .on_scroll_wheel(cx.listener(|this, event: &ScrollWheelEvent, _win, cx| {
+                let delta_y = match event.delta {
+                    ScrollDelta::Pixels(p) => (p.y / px(20.0)) as i32,
+                    ScrollDelta::Lines(l) => l.y as i32,
+                };
+                if let Some(t) = this.current_terminal_mut() {
+                    if delta_y < 0 {
+                        t.scroll_up(3);
+                    } else if delta_y > 0 {
+                        t.scroll_down(3);
+                    }
+                    cx.notify();
+                }
+            }))
+            .child(header)
+            .child(
+                div()
+                    .flex_1()
+                    .overflow_hidden()
+                    .p_2p5()
+                    .bg(theme.bg_terminal)
+                    .children(output_divs),
+            )
+            .into_any_element()
+    }
+}
+
+impl Render for EditorView {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let is_maximized = crate::window_controls::is_window_maximized(window);
+
+        for term in &mut self.terminals {
+            term.poll_output();
+        }
+
+        let project_name = self
+            .sidebar
+            .root_path
+            .as_ref()
+            .and_then(|p| p.file_name())
+            .map(|s| s.to_string_lossy().to_string())
+            .unwrap_or_else(|| "Open Recent Project".into());
+
+        let theme = &self.theme;
+
+        let sidebar_element = if self.show_sidebar {
+            Some(self.render_sidebar(&project_name, cx))
+        } else {
+            None
+        };
+
+        let sidebar_resizer = if self.show_sidebar {
+            let is_resizing = self.resizing_sidebar;
             Some(
                 div()
-                    .h(px(4.0))
+                    .w(px(2.0))
+                    .h_full()
+                    .cursor_col_resize()
+                    .bg(if is_resizing {
+                        theme.accent
+                    } else {
+                        theme.border_subtle
+                    })
+                    .hover(|s| s.bg(theme.accent))
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(|this, event: &MouseDownEvent, _win, cx| {
+                            if event.click_count == 2 {
+                                this.sidebar_width = 230.0;
+                                this.resizing_sidebar = false;
+                                this.save_config();
+                            } else {
+                                this.resizing_sidebar = true;
+                            }
+                            cx.notify();
+                        }),
+                    )
+                    .into_any_element(),
+            )
+        } else {
+            None
+        };
+
+        let right_title_bar = self.render_title_bar(&project_name, is_maximized, cx);
+        let tab_bar = self.render_tab_bar(cx);
+        let breadcrumb_bar = self.render_breadcrumb_bar(cx);
+        let editor_pane = self.render_editor_pane(cx);
+
+        let terminal_resizer = if self.show_terminal {
+            let is_resizing = self.resizing_terminal;
+            Some(
+                div()
+                    .h(px(2.0))
                     .w_full()
                     .cursor_row_resize()
-                    .bg(if is_resizing || is_focused {
+                    .bg(if is_resizing {
                         theme.accent
                     } else {
                         theme.border_subtle
@@ -2319,26 +2808,45 @@ impl Render for EditorView {
                             }
                             cx.notify();
                         }),
-                    ),
+                    )
+                    .into_any_element(),
             )
         } else {
             None
         };
 
-        // =========================================================================
-        // 7. 模态弹窗 (File Finder / Settings)
-        // =========================================================================
-        let modal_overlay = if self.file_finder.is_open {
-            Some(self.file_finder.render(theme, cx).into_any_element())
-        } else if self.show_settings {
-            Some(SettingsModal::render(&self.settings, theme, cx).into_any_element())
+        let bottom_terminal = if self.show_terminal && !self.terminals.is_empty() {
+            Some(self.render_terminal_dock(cx))
         } else {
             None
         };
 
-        // =========================================================================
-        // 8. 全局窗口架构布局 (Antigravity TitleBar + Zed Workspace Hierarchy)
-        // =========================================================================
+        let status_bar = StatusBar::render(
+            self.current_buffer(),
+            &self.theme,
+            &self.settings,
+            self.show_sidebar,
+            self.show_terminal,
+            cx,
+        )
+        .into_any_element();
+
+        let modal_overlay = if self.file_finder.is_open {
+            Some(self.file_finder.render(&self.theme, cx).into_any_element())
+        } else if self.show_settings {
+            Some(SettingsModal::render(
+                &self.settings,
+                &self.theme,
+                &self.system_fonts,
+                self.open_font_dropdown,
+                &self.font_dropdown_query,
+                self.font_dropdown_scroll,
+                cx,
+            ))
+        } else {
+            None
+        };
+
         let mut root = div()
             .key_context("Editor")
             .track_focus(&self.focus_handle)
@@ -2346,12 +2854,11 @@ impl Render for EditorView {
             .on_mouse_move(cx.listener(Self::handle_mouse_move))
             .on_mouse_up(MouseButton::Left, cx.listener(Self::handle_mouse_up))
             .size_full()
-            .bg(theme.bg_app)
+            .bg(self.theme.bg_app)
             .font_family(".SystemUIFont")
             .text_size(px(self.settings.font_size))
             .flex()
-            .flex_col()
-            .justify_between();
+            .flex_row();
 
         if self.resizing_sidebar {
             root = root.cursor_col_resize();
@@ -2359,40 +2866,23 @@ impl Render for EditorView {
             root = root.cursor_row_resize();
         }
 
-        root
-            // 顶层全局标题栏 (Antigravity 风格全宽整合顶栏，含可拖拽区域与窗口控制按钮)
-            .child(top_title_bar)
-            // 主工作区：侧边栏 + 纵向分割线 + 编辑工作区 (Tab顶栏 + 面包屑 + 编辑器 + 横向分割线 + 底部终端)
+        root.children(sidebar_element)
+            .children(sidebar_resizer)
             .child(
                 div()
                     .flex_1()
+                    .h_full()
                     .flex()
+                    .flex_col()
                     .overflow_hidden()
-                    .children(sidebar_element)
-                    .children(sidebar_resizer)
-                    .child(
-                        div()
-                            .flex_1()
-                            .flex()
-                            .flex_col()
-                            .overflow_hidden()
-                            .child(tab_bar)
-                            .child(breadcrumb_bar)
-                            .child(editor_pane)
-                            .children(terminal_resizer)
-                            .children(bottom_terminal),
-                    ),
+                    .child(right_title_bar)
+                    .child(tab_bar)
+                    .child(breadcrumb_bar)
+                    .child(editor_pane)
+                    .children(terminal_resizer)
+                    .children(bottom_terminal)
+                    .child(status_bar),
             )
-            // 底部状态栏
-            .child(StatusBar::render(
-                self.current_buffer(),
-                theme,
-                &self.settings,
-                self.show_sidebar,
-                self.show_terminal,
-                cx,
-            ))
-            // 模态弹窗
             .children(modal_overlay)
     }
 }

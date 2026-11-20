@@ -289,6 +289,7 @@ impl TextBuffer {
         self.is_dirty = true;
     }
 
+    #[allow(dead_code)]
     pub fn insert_char(&mut self, ch: char) {
         let mut buf = [0u8; 4];
         let s = ch.encode_utf8(&mut buf);

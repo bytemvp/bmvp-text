@@ -2,328 +2,702 @@ use crate::settings::EditorSettings;
 use crate::theme::{Theme, ThemeMode};
 use gpui::*;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FontDropdownTarget {
+    Editor,
+    Terminal,
+}
+
 pub struct SettingsModal;
 
 impl SettingsModal {
-    pub fn render(
-        settings: &EditorSettings,
+    fn render_option_pill(
+        label: impl Into<SharedString>,
+        font_family: Option<&'static str>,
+        is_selected: bool,
+        bold_when_selected: bool,
+        compact: bool,
         theme: &Theme,
-        cx: &Context<crate::editor::EditorView>,
-    ) -> impl IntoElement {
-        let current_theme = theme.mode;
-        let current_font = settings.font_family.clone();
-        let current_size = settings.font_size;
-        let current_tab = settings.tab_size;
-        let show_line_num = settings.show_line_numbers;
+        listener: impl Fn(&MouseDownEvent, &mut Window, &mut App) + 'static,
+    ) -> AnyElement {
+        let bg = if is_selected {
+            theme.accent
+        } else {
+            theme.bg_hover
+        };
+        let fg = if is_selected {
+            theme.text_on_accent
+        } else {
+            theme.text_secondary
+        };
 
-        let current_shell = settings.terminal_shell.clone();
-        let current_term_font = settings.terminal_font_family.clone();
-        let current_term_size = settings.terminal_font_size;
-
-        let text_on_accent: Hsla = rgb(0x09090b).into();
-
-        // 1. 主题选择
-        let mut theme_buttons = Vec::new();
-        for &mode in ThemeMode::all() {
-            let is_selected = mode == current_theme;
-            let bg = if is_selected {
-                theme.accent
-            } else {
-                theme.bg_hover
-            };
-            let fg = if is_selected {
-                text_on_accent
-            } else {
-                theme.text_secondary
-            };
-
-            theme_buttons.push(
-                div()
-                    .px_3()
-                    .py_1()
-                    .rounded_sm()
-                    .cursor_pointer()
-                    .bg(bg)
-                    .text_color(fg)
-                    .hover(|s| s.opacity(0.85))
-                    .text_xs()
-                    .font_weight(if is_selected {
-                        FontWeight::BOLD
-                    } else {
-                        FontWeight::NORMAL
-                    })
-                    .child(mode.name())
-                    .on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(move |this, _, _win, cx| {
-                            this.set_theme_mode(mode, cx);
-                        }),
-                    ),
-            );
-        }
-
-        // 2. 编辑器字体
-        let mut font_buttons = Vec::new();
-        for &font in EditorSettings::AVAILABLE_FONTS {
-            let is_selected = font == current_font;
-            let bg = if is_selected {
-                theme.accent
-            } else {
-                theme.bg_hover
-            };
-            let fg = if is_selected {
-                text_on_accent
-            } else {
-                theme.text_secondary
-            };
-            let font_name = font.to_string();
-
-            font_buttons.push(
-                div()
-                    .px_3()
-                    .py_1()
-                    .rounded_sm()
-                    .cursor_pointer()
-                    .bg(bg)
-                    .text_color(fg)
-                    .hover(|s| s.opacity(0.85))
-                    .text_xs()
-                    .font_family(font)
-                    .child(font)
-                    .on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(move |this, _, _win, cx| {
-                            this.settings.font_family = font_name.clone();
-                            this.save_config();
-                            cx.notify();
-                        }),
-                    ),
-            );
-        }
-
-        // 3. 编辑器字号
-        let mut size_buttons = Vec::new();
-        for &size in EditorSettings::AVAILABLE_FONT_SIZES {
-            let is_selected = (size - current_size).abs() < f32::EPSILON;
-            let bg = if is_selected {
-                theme.accent
-            } else {
-                theme.bg_hover
-            };
-            let fg = if is_selected {
-                text_on_accent
-            } else {
-                theme.text_secondary
-            };
-
-            size_buttons.push(
-                div()
-                    .px_2p5()
-                    .py_1()
-                    .rounded_sm()
-                    .cursor_pointer()
-                    .bg(bg)
-                    .text_color(fg)
-                    .hover(|s| s.opacity(0.85))
-                    .text_xs()
-                    .child(format!("{:.0}", size))
-                    .on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(move |this, _, _win, cx| {
-                            this.settings.font_size = size;
-                            this.save_config();
-                            cx.notify();
-                        }),
-                    ),
-            );
-        }
-
-        // 4. 终端 Shell 程序选择
-        let mut shell_buttons = Vec::new();
-        for &(shell_title, shell_bin) in EditorSettings::AVAILABLE_SHELLS {
-            let is_selected = shell_bin == current_shell;
-            let bg = if is_selected {
-                theme.accent
-            } else {
-                theme.bg_hover
-            };
-            let fg = if is_selected {
-                text_on_accent
-            } else {
-                theme.text_secondary
-            };
-            let bin_name = shell_bin.to_string();
-
-            shell_buttons.push(
-                div()
-                    .px_3()
-                    .py_1()
-                    .rounded_sm()
-                    .cursor_pointer()
-                    .bg(bg)
-                    .text_color(fg)
-                    .hover(|s| s.opacity(0.85))
-                    .text_xs()
-                    .font_weight(if is_selected {
-                        FontWeight::BOLD
-                    } else {
-                        FontWeight::NORMAL
-                    })
-                    .child(shell_title)
-                    .on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(move |this, _, _win, cx| {
-                            this.settings.terminal_shell = bin_name.clone();
-                            this.restart_terminal();
-                            this.save_config();
-                            cx.notify();
-                        }),
-                    ),
-            );
-        }
-
-        // 5. 终端字体
-        let mut term_font_buttons = Vec::new();
-        for &font in EditorSettings::AVAILABLE_FONTS {
-            let is_selected = font == current_term_font;
-            let bg = if is_selected {
-                theme.accent
-            } else {
-                theme.bg_hover
-            };
-            let fg = if is_selected {
-                text_on_accent
-            } else {
-                theme.text_secondary
-            };
-            let font_name = font.to_string();
-
-            term_font_buttons.push(
-                div()
-                    .px_3()
-                    .py_1()
-                    .rounded_sm()
-                    .cursor_pointer()
-                    .bg(bg)
-                    .text_color(fg)
-                    .hover(|s| s.opacity(0.85))
-                    .text_xs()
-                    .font_family(font)
-                    .child(font)
-                    .on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(move |this, _, _win, cx| {
-                            this.settings.terminal_font_family = font_name.clone();
-                            this.save_config();
-                            cx.notify();
-                        }),
-                    ),
-            );
-        }
-
-        // 6. 终端字号
-        let mut term_size_buttons = Vec::new();
-        for &size in EditorSettings::AVAILABLE_FONT_SIZES {
-            let is_selected = (size - current_term_size).abs() < f32::EPSILON;
-            let bg = if is_selected {
-                theme.accent
-            } else {
-                theme.bg_hover
-            };
-            let fg = if is_selected {
-                text_on_accent
-            } else {
-                theme.text_secondary
-            };
-
-            term_size_buttons.push(
-                div()
-                    .px_2p5()
-                    .py_1()
-                    .rounded_sm()
-                    .cursor_pointer()
-                    .bg(bg)
-                    .text_color(fg)
-                    .hover(|s| s.opacity(0.85))
-                    .text_xs()
-                    .child(format!("{:.0}", size))
-                    .on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(move |this, _, _win, cx| {
-                            this.settings.terminal_font_size = size;
-                            this.save_config();
-                            cx.notify();
-                        }),
-                    ),
-            );
-        }
-
-        // 7. Tab 大小
-        let mut tab_buttons = Vec::new();
-        for &tab_size in EditorSettings::AVAILABLE_TAB_SIZES {
-            let is_selected = tab_size == current_tab;
-            let bg = if is_selected {
-                theme.accent
-            } else {
-                theme.bg_hover
-            };
-            let fg = if is_selected {
-                text_on_accent
-            } else {
-                theme.text_secondary
-            };
-
-            tab_buttons.push(
-                div()
-                    .px_3()
-                    .py_1()
-                    .rounded_sm()
-                    .cursor_pointer()
-                    .bg(bg)
-                    .text_color(fg)
-                    .hover(|s| s.opacity(0.85))
-                    .text_xs()
-                    .child(format!("{} spaces", tab_size))
-                    .on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(move |this, _, _win, cx| {
-                            this.settings.tab_size = tab_size;
-                            this.save_config();
-                            cx.notify();
-                        }),
-                    ),
-            );
-        }
-
-        // 行号开关
-        let line_num_toggle = div()
-            .px_3()
+        let mut btn = div()
             .py_1()
             .rounded_sm()
             .cursor_pointer()
-            .bg(if show_line_num {
-                theme.accent
-            } else {
-                theme.bg_hover
-            })
-            .text_color(if show_line_num {
-                text_on_accent
-            } else {
-                theme.text_secondary
-            })
+            .bg(bg)
+            .text_color(fg)
+            .hover(|s| s.opacity(0.85))
             .text_xs()
-            .font_weight(FontWeight::MEDIUM)
-            .child(if show_line_num { "Enabled" } else { "Disabled" })
+            .child(label.into())
+            .on_mouse_down(MouseButton::Left, listener);
+
+        btn = if compact { btn.px_2p5() } else { btn.px_3() };
+
+        if let Some(font) = font_family {
+            btn = btn.font_family(font);
+        }
+        if bold_when_selected && is_selected {
+            btn = btn.font_weight(FontWeight::BOLD);
+        }
+
+        btn.into_any_element()
+    }
+
+    fn render_field(label: &'static str, items: Vec<AnyElement>, theme: &Theme) -> AnyElement {
+        div()
+            .flex()
+            .flex_col()
+            .gap_1()
+            .child(
+                div()
+                    .text_xs()
+                    .font_weight(FontWeight::MEDIUM)
+                    .text_color(theme.text_secondary)
+                    .child(label),
+            )
+            .child(div().flex().flex_wrap().gap_1p5().children(items))
+            .into_any_element()
+    }
+
+    fn render_font_dropdown_trigger(
+        label: &'static str,
+        current_font: &str,
+        target: FontDropdownTarget,
+        is_open: bool,
+        total_fonts: usize,
+        theme: &Theme,
+        cx: &Context<crate::editor::EditorView>,
+    ) -> AnyElement {
+        let font_preview = current_font.to_string();
+        let font_label = current_font.to_string();
+
+        div()
+            .flex()
+            .flex_col()
+            .gap_1()
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .child(
+                        div()
+                            .text_xs()
+                            .font_weight(FontWeight::MEDIUM)
+                            .text_color(theme.text_secondary)
+                            .child(label),
+                    )
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(theme.text_muted)
+                            .child(format!("{} system fonts", total_fonts)),
+                    ),
+            )
+            .child(
+                div()
+                    .h(px(30.0))
+                    .w_full()
+                    .px_3()
+                    .rounded_sm()
+                    .bg(theme.bg_editor)
+                    .border_1()
+                    .border_color(if is_open { theme.accent } else { theme.border })
+                    .cursor_pointer()
+                    .hover(|s| s.border_color(theme.accent))
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(move |this, _, _win, cx| {
+                            this.ensure_system_fonts_loaded(cx);
+                            if this.open_font_dropdown == Some(target) {
+                                this.open_font_dropdown = None;
+                            } else {
+                                this.open_font_dropdown = Some(target);
+                            }
+                            this.font_dropdown_query.clear();
+                            this.font_dropdown_scroll = 0;
+                            cx.stop_propagation();
+                            cx.notify();
+                        }),
+                    )
+                    .child(
+                        div()
+                            .text_xs()
+                            .font_family(font_preview)
+                            .text_color(theme.text_primary)
+                            .child(font_label),
+                    )
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(if is_open {
+                                theme.accent
+                            } else {
+                                theme.text_muted
+                            })
+                            .child(if is_open { "▴" } else { "▾" }),
+                    ),
+            )
+            .into_any_element()
+    }
+
+    fn render_font_dropdown_menu(
+        target: FontDropdownTarget,
+        current_font: &str,
+        system_fonts: &[String],
+        query: &str,
+        scroll_offset: usize,
+        theme: &Theme,
+        cx: &Context<crate::editor::EditorView>,
+    ) -> AnyElement {
+        let q = query.trim().to_lowercase();
+        let filtered: Vec<&String> = if q.is_empty() {
+            system_fonts.iter().collect()
+        } else {
+            system_fonts
+                .iter()
+                .filter(|name| name.to_lowercase().contains(&q))
+                .collect()
+        };
+
+        let visible_rows = 8usize;
+        let max_scroll = filtered.len().saturating_sub(visible_rows);
+        let scroll = scroll_offset.min(max_scroll);
+        let end = (scroll + visible_rows).min(filtered.len());
+
+        let mut rows: Vec<AnyElement> = Vec::new();
+        if filtered.is_empty() {
+            rows.push(
+                div()
+                    .h(px(36.0))
+                    .px_3()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .text_xs()
+                    .text_color(theme.text_muted)
+                    .child("No matching fonts found")
+                    .into_any_element(),
+            );
+        } else {
+            for &font_name in &filtered[scroll..end] {
+                let is_selected = font_name == current_font;
+                let chosen = font_name.clone();
+                let preview_font = font_name.clone();
+                let label = font_name.clone();
+
+                rows.push(
+                    div()
+                        .h(px(26.0))
+                        .px_3()
+                        .flex()
+                        .items_center()
+                        .justify_between()
+                        .cursor_pointer()
+                        .bg(if is_selected {
+                            theme.selection
+                        } else {
+                            theme.bg_modal
+                        })
+                        .hover(|s| s.bg(theme.bg_hover))
+                        .on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(move |this, _, _win, cx| {
+                                match target {
+                                    FontDropdownTarget::Terminal => {
+                                        this.settings.terminal_font_family = chosen.clone();
+                                    }
+                                    FontDropdownTarget::Editor => {
+                                        this.settings.font_family = chosen.clone();
+                                    }
+                                }
+                                this.open_font_dropdown = None;
+                                this.font_dropdown_query.clear();
+                                this.font_dropdown_scroll = 0;
+                                this.save_config();
+                                cx.stop_propagation();
+                                cx.notify();
+                            }),
+                        )
+                        .child(
+                            div()
+                                .text_xs()
+                                .font_family(preview_font)
+                                .text_color(if is_selected {
+                                    theme.accent
+                                } else {
+                                    theme.text_primary
+                                })
+                                .font_weight(if is_selected {
+                                    FontWeight::MEDIUM
+                                } else {
+                                    FontWeight::NORMAL
+                                })
+                                .child(label),
+                        )
+                        .children(if is_selected {
+                            Some(div().text_xs().text_color(theme.accent).child("✓"))
+                        } else {
+                            None
+                        })
+                        .into_any_element(),
+                );
+            }
+        }
+
+        let search_bar = div()
+            .h(px(30.0))
+            .px_3()
+            .bg(theme.bg_surface)
+            .border_b_1()
+            .border_color(theme.border_subtle)
+            .flex()
+            .items_center()
+            .justify_between()
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .child(div().text_xs().text_color(theme.accent).child("⌕"))
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(if query.is_empty() {
+                                theme.text_muted
+                            } else {
+                                theme.text_primary
+                            })
+                            .child(if query.is_empty() {
+                                "Type to filter system fonts...".to_string()
+                            } else {
+                                query.to_string()
+                            }),
+                    ),
+            )
+            .child(div().text_xs().text_color(theme.text_muted).child(format!(
+                "{}/{}",
+                filtered.len(),
+                system_fonts.len()
+            )))
+            .into_any_element();
+
+        let mut panel = div()
+            .absolute()
+            .left(px(16.0))
+            .right(px(16.0))
+            .bg(theme.bg_modal)
+            .border_1()
+            .border_color(theme.accent)
+            .rounded_md()
+            .shadow_lg()
+            .overflow_hidden()
+            .occlude()
+            .on_mouse_down(MouseButton::Left, |_, _, cx| {
+                cx.stop_propagation();
+            }) // 阻止冒泡到弹窗和背景遮罩
+            .on_scroll_wheel(
+                cx.listener(move |this, event: &ScrollWheelEvent, _win, cx| {
+                    let delta_y = match event.delta {
+                        ScrollDelta::Pixels(p) => (p.y / px(20.0)) as i32,
+                        ScrollDelta::Lines(l) => l.y as i32,
+                    };
+                    if delta_y < 0 {
+                        this.font_dropdown_scroll = (this.font_dropdown_scroll + 2).min(max_scroll);
+                    } else if delta_y > 0 {
+                        this.font_dropdown_scroll = this.font_dropdown_scroll.saturating_sub(2);
+                    }
+                    cx.stop_propagation();
+                    cx.notify();
+                }),
+            )
+            .child(search_bar)
+            .child(div().flex().flex_col().py_1().children(rows));
+
+        panel = match target {
+            FontDropdownTarget::Terminal => panel.top(px(252.0)),
+            FontDropdownTarget::Editor => panel.bottom(px(124.0)),
+        };
+
+        panel.into_any_element()
+    }
+
+    fn render_header(theme: &Theme, cx: &Context<crate::editor::EditorView>) -> AnyElement {
+        div()
+            .h(px(40.0))
+            .px_4()
+            .bg(theme.bg_surface)
+            .rounded_t_md()
+            .border_b_1()
+            .border_color(theme.border_subtle)
+            .flex()
+            .items_center()
+            .justify_between()
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .child(
+                        div()
+                            .text_xs()
+                            .font_weight(FontWeight::BOLD)
+                            .text_color(theme.text_primary)
+                            .child("Preferences"),
+                    )
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(theme.text_muted)
+                            .child("— Settings & Terminal Configuration"),
+                    ),
+            )
+            .child(
+                div()
+                    .w_5()
+                    .h_5()
+                    .rounded_xs()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .cursor_pointer()
+                    .hover(|s| s.bg(theme.bg_hover).text_color(theme.error))
+                    .text_color(theme.text_muted)
+                    .text_xs()
+                    .child("✕")
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(|this, _, _win, cx| {
+                            this.show_settings = false;
+                            this.open_font_dropdown = None;
+                            this.font_dropdown_query.clear();
+                            cx.stop_propagation();
+                            cx.notify();
+                        }),
+                    ),
+            )
+            .into_any_element()
+    }
+
+    fn render_theme_section(theme: &Theme, cx: &Context<crate::editor::EditorView>) -> AnyElement {
+        let current_theme = theme.mode;
+        let theme_buttons: Vec<AnyElement> = ThemeMode::all()
+            .iter()
+            .map(|&mode| {
+                Self::render_option_pill(
+                    mode.name(),
+                    None,
+                    mode == current_theme,
+                    true,
+                    false,
+                    theme,
+                    cx.listener(move |this, _, _win, cx| {
+                        this.set_theme_mode(mode, cx);
+                    }),
+                )
+            })
+            .collect();
+
+        Self::render_field("Color Theme", theme_buttons, theme)
+    }
+
+    fn render_terminal_section(
+        settings: &EditorSettings,
+        theme: &Theme,
+        total_fonts: usize,
+        is_font_dropdown_open: bool,
+        cx: &Context<crate::editor::EditorView>,
+    ) -> AnyElement {
+        let current_shell = &settings.terminal_shell;
+        let current_term_size = settings.terminal_font_size;
+
+        let shell_buttons: Vec<AnyElement> = EditorSettings::AVAILABLE_SHELLS
+            .iter()
+            .map(|&(shell_title, shell_bin)| {
+                let bin_name = shell_bin.to_string();
+                Self::render_option_pill(
+                    shell_title,
+                    None,
+                    shell_bin == current_shell,
+                    true,
+                    false,
+                    theme,
+                    cx.listener(move |this, _, _win, cx| {
+                        this.settings.terminal_shell = bin_name.clone();
+                        this.restart_terminal();
+                        this.save_config();
+                        cx.notify();
+                    }),
+                )
+            })
+            .collect();
+
+        let term_size_buttons: Vec<AnyElement> = EditorSettings::AVAILABLE_FONT_SIZES
+            .iter()
+            .map(|&size| {
+                Self::render_option_pill(
+                    format!("{:.0}", size),
+                    None,
+                    (size - current_term_size).abs() < f32::EPSILON,
+                    false,
+                    true,
+                    theme,
+                    cx.listener(move |this, _, _win, cx| {
+                        this.settings.terminal_font_size = size;
+                        this.save_config();
+                        cx.notify();
+                    }),
+                )
+            })
+            .collect();
+
+        div()
+            .pt_2()
+            .border_t_1()
+            .border_color(theme.border_subtle)
+            .flex()
+            .flex_col()
+            .gap_2p5()
+            .child(
+                div()
+                    .text_xs()
+                    .font_weight(FontWeight::BOLD)
+                    .text_color(theme.accent)
+                    .child("TERMINAL SETTINGS"),
+            )
+            .child(Self::render_field(
+                "Terminal Shell Program",
+                shell_buttons,
+                theme,
+            ))
+            .child(Self::render_font_dropdown_trigger(
+                "Terminal Font Family",
+                &settings.terminal_font_family,
+                FontDropdownTarget::Terminal,
+                is_font_dropdown_open,
+                total_fonts,
+                theme,
+                cx,
+            ))
+            .child(Self::render_field(
+                "Terminal Font Size",
+                term_size_buttons,
+                theme,
+            ))
+            .into_any_element()
+    }
+
+    fn render_editor_section(
+        settings: &EditorSettings,
+        theme: &Theme,
+        total_fonts: usize,
+        is_font_dropdown_open: bool,
+        cx: &Context<crate::editor::EditorView>,
+    ) -> AnyElement {
+        let current_size = settings.font_size;
+
+        let size_buttons: Vec<AnyElement> = EditorSettings::AVAILABLE_FONT_SIZES
+            .iter()
+            .map(|&size| {
+                Self::render_option_pill(
+                    format!("{:.0}", size),
+                    None,
+                    (size - current_size).abs() < f32::EPSILON,
+                    false,
+                    true,
+                    theme,
+                    cx.listener(move |this, _, _win, cx| {
+                        this.settings.font_size = size;
+                        this.save_config();
+                        cx.notify();
+                    }),
+                )
+            })
+            .collect();
+
+        div()
+            .pt_2()
+            .border_t_1()
+            .border_color(theme.border_subtle)
+            .flex()
+            .flex_col()
+            .gap_2p5()
+            .child(
+                div()
+                    .text_xs()
+                    .font_weight(FontWeight::BOLD)
+                    .text_color(theme.text_secondary)
+                    .child("EDITOR SETTINGS"),
+            )
+            .child(Self::render_font_dropdown_trigger(
+                "Editor Font Family",
+                &settings.font_family,
+                FontDropdownTarget::Editor,
+                is_font_dropdown_open,
+                total_fonts,
+                theme,
+                cx,
+            ))
+            .child(Self::render_field("Editor Font Size", size_buttons, theme))
+            .into_any_element()
+    }
+
+    fn render_misc_section(
+        settings: &EditorSettings,
+        theme: &Theme,
+        cx: &Context<crate::editor::EditorView>,
+    ) -> AnyElement {
+        let current_tab = settings.tab_size;
+        let show_line_num = settings.show_line_numbers;
+
+        let tab_buttons: Vec<AnyElement> = EditorSettings::AVAILABLE_TAB_SIZES
+            .iter()
+            .map(|&tab_size| {
+                Self::render_option_pill(
+                    format!("{} spaces", tab_size),
+                    None,
+                    tab_size == current_tab,
+                    false,
+                    false,
+                    theme,
+                    cx.listener(move |this, _, _win, cx| {
+                        this.settings.tab_size = tab_size;
+                        this.save_config();
+                        cx.notify();
+                    }),
+                )
+            })
+            .collect();
+
+        let line_num_toggle = Self::render_option_pill(
+            if show_line_num { "Enabled" } else { "Disabled" },
+            None,
+            show_line_num,
+            false,
+            false,
+            theme,
+            cx.listener(|this, _, _win, cx| {
+                this.settings.show_line_numbers = !this.settings.show_line_numbers;
+                this.save_config();
+                cx.notify();
+            }),
+        );
+
+        div()
+            .pt_2()
+            .border_t_1()
+            .border_color(theme.border_subtle)
+            .flex()
+            .items_center()
+            .justify_between()
+            .child(Self::render_field("Tab Indent Size", tab_buttons, theme))
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap_1()
+                    .items_end()
+                    .child(
+                        div()
+                            .text_xs()
+                            .font_weight(FontWeight::MEDIUM)
+                            .text_color(theme.text_secondary)
+                            .child("Line Numbers"),
+                    )
+                    .child(line_num_toggle),
+            )
+            .into_any_element()
+    }
+
+    pub fn render(
+        settings: &EditorSettings,
+        theme: &Theme,
+        system_fonts: &[String],
+        open_dropdown: Option<FontDropdownTarget>,
+        dropdown_query: &str,
+        dropdown_scroll: usize,
+        cx: &Context<crate::editor::EditorView>,
+    ) -> AnyElement {
+        let total_fonts = system_fonts.len();
+
+        let dropdown_overlay = open_dropdown.map(|target| {
+            let cur_font = match target {
+                FontDropdownTarget::Terminal => settings.terminal_font_family.as_str(),
+                FontDropdownTarget::Editor => settings.font_family.as_str(),
+            };
+            Self::render_font_dropdown_menu(
+                target,
+                cur_font,
+                system_fonts,
+                dropdown_query,
+                dropdown_scroll,
+                theme,
+                cx,
+            )
+        });
+
+        let modal_card = div()
+            .relative()
+            .w(px(620.0))
+            .rounded_md()
+            .bg(theme.bg_modal)
+            .border_1()
+            .border_color(theme.border)
+            .shadow_lg()
+            .occlude()
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|this, _, _win, cx| {
-                    this.settings.show_line_numbers = !this.settings.show_line_numbers;
-                    this.save_config();
-                    cx.notify();
+                    if this.open_font_dropdown.is_some() {
+                        this.open_font_dropdown = None;
+                        this.font_dropdown_query.clear();
+                        cx.notify();
+                    }
+                    cx.stop_propagation();
                 }),
-            );
+            )
+            .child(Self::render_header(theme, cx))
+            .child(
+                div()
+                    .p_4()
+                    .rounded_b_md()
+                    .flex()
+                    .flex_col()
+                    .gap_3p5()
+                    .child(Self::render_theme_section(theme, cx))
+                    .child(Self::render_terminal_section(
+                        settings,
+                        theme,
+                        total_fonts,
+                        open_dropdown == Some(FontDropdownTarget::Terminal),
+                        cx,
+                    ))
+                    .child(Self::render_editor_section(
+                        settings,
+                        theme,
+                        total_fonts,
+                        open_dropdown == Some(FontDropdownTarget::Editor),
+                        cx,
+                    ))
+                    .child(Self::render_misc_section(settings, theme, cx)),
+            )
+            .children(dropdown_overlay)
+            .into_any_element();
 
-        // Zed 风格弹窗
         div()
             .absolute()
             .inset_0()
@@ -331,277 +705,26 @@ impl SettingsModal {
             .flex_col()
             .items_center()
             .pt(px(40.0))
-            .bg(hsla(0.0, 0.0, 0.0, 0.65))
+            .bg(if theme.is_light() {
+                hsla(0.0, 0.0, 0.0, 0.30)
+            } else {
+                hsla(0.0, 0.0, 0.0, 0.65)
+            })
+            .occlude()
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|this, _, _win, cx| {
-                    this.show_settings = false;
+                    if this.open_font_dropdown.is_some() {
+                        this.open_font_dropdown = None;
+                        this.font_dropdown_query.clear();
+                    } else {
+                        this.show_settings = false;
+                    }
+                    cx.stop_propagation();
                     cx.notify();
                 }),
             )
-            .child(
-                div()
-                    .w(px(620.0))
-                    .rounded_md()
-                    .bg(theme.bg_modal)
-                    .border_1()
-                    .border_color(theme.border)
-                    .shadow_lg()
-                    .overflow_hidden()
-                    .on_mouse_down(MouseButton::Left, |_, _, _| {}) // 阻止冒泡
-                    // 弹窗头部
-                    .child(
-                        div()
-                            .h(px(40.0))
-                            .px_4()
-                            .bg(theme.bg_surface)
-                            .border_b_1()
-                            .border_color(theme.border_subtle)
-                            .flex()
-                            .items_center()
-                            .justify_between()
-                            .child(
-                                div()
-                                    .flex()
-                                    .items_center()
-                                    .gap_2()
-                                    .child(
-                                        div()
-                                            .text_xs()
-                                            .font_weight(FontWeight::BOLD)
-                                            .text_color(theme.text_primary)
-                                            .child("Preferences"),
-                                    )
-                                    .child(
-                                        div()
-                                            .text_xs()
-                                            .text_color(theme.text_muted)
-                                            .child("— Settings & Terminal Configuration"),
-                                    ),
-                            )
-                            .child(
-                                div()
-                                    .w_5()
-                                    .h_5()
-                                    .rounded_xs()
-                                    .flex()
-                                    .items_center()
-                                    .justify_center()
-                                    .cursor_pointer()
-                                    .hover(|s| s.bg(theme.bg_hover).text_color(theme.error))
-                                    .text_color(theme.text_muted)
-                                    .text_xs()
-                                    .child("✕")
-                                    .on_mouse_down(
-                                        MouseButton::Left,
-                                        cx.listener(|this, _, _win, cx| {
-                                            this.show_settings = false;
-                                            cx.notify();
-                                        }),
-                                    ),
-                            ),
-                    )
-                    // 设置主体内容区
-                    .child(
-                        div()
-                            .p_4()
-                            .flex()
-                            .flex_col()
-                            .gap_3p5()
-                            // 1. 主题
-                            .child(
-                                div()
-                                    .flex()
-                                    .flex_col()
-                                    .gap_1()
-                                    .child(
-                                        div()
-                                            .text_xs()
-                                            .font_weight(FontWeight::MEDIUM)
-                                            .text_color(theme.text_secondary)
-                                            .child("Color Theme"),
-                                    )
-                                    .child(
-                                        div().flex().flex_wrap().gap_1p5().children(theme_buttons),
-                                    ),
-                            )
-                            // 2. 终端配置区块 (Terminal Shell & Font)
-                            .child(
-                                div()
-                                    .pt_2()
-                                    .border_t_1()
-                                    .border_color(theme.border_subtle)
-                                    .flex()
-                                    .flex_col()
-                                    .gap_2p5()
-                                    .child(
-                                        div()
-                                            .text_xs()
-                                            .font_weight(FontWeight::BOLD)
-                                            .text_color(theme.accent)
-                                            .child("TERMINAL SETTINGS"),
-                                    )
-                                    // Shell
-                                    .child(
-                                        div()
-                                            .flex()
-                                            .flex_col()
-                                            .gap_1()
-                                            .child(
-                                                div()
-                                                    .text_xs()
-                                                    .font_weight(FontWeight::MEDIUM)
-                                                    .text_color(theme.text_secondary)
-                                                    .child("Terminal Shell Program"),
-                                            )
-                                            .child(
-                                                div()
-                                                    .flex()
-                                                    .flex_wrap()
-                                                    .gap_1p5()
-                                                    .children(shell_buttons),
-                                            ),
-                                    )
-                                    // 终端字体
-                                    .child(
-                                        div()
-                                            .flex()
-                                            .flex_col()
-                                            .gap_1()
-                                            .child(
-                                                div()
-                                                    .text_xs()
-                                                    .font_weight(FontWeight::MEDIUM)
-                                                    .text_color(theme.text_secondary)
-                                                    .child("Terminal Font Family"),
-                                            )
-                                            .child(
-                                                div()
-                                                    .flex()
-                                                    .flex_wrap()
-                                                    .gap_1p5()
-                                                    .children(term_font_buttons),
-                                            ),
-                                    )
-                                    // 终端字号
-                                    .child(
-                                        div()
-                                            .flex()
-                                            .flex_col()
-                                            .gap_1()
-                                            .child(
-                                                div()
-                                                    .text_xs()
-                                                    .font_weight(FontWeight::MEDIUM)
-                                                    .text_color(theme.text_secondary)
-                                                    .child("Terminal Font Size"),
-                                            )
-                                            .child(
-                                                div()
-                                                    .flex()
-                                                    .flex_wrap()
-                                                    .gap_1p5()
-                                                    .children(term_size_buttons),
-                                            ),
-                                    ),
-                            )
-                            // 3. 编辑器字体与格式化区块
-                            .child(
-                                div()
-                                    .pt_2()
-                                    .border_t_1()
-                                    .border_color(theme.border_subtle)
-                                    .flex()
-                                    .flex_col()
-                                    .gap_2p5()
-                                    .child(
-                                        div()
-                                            .text_xs()
-                                            .font_weight(FontWeight::BOLD)
-                                            .text_color(theme.text_secondary)
-                                            .child("EDITOR SETTINGS"),
-                                    )
-                                    .child(
-                                        div()
-                                            .flex()
-                                            .flex_col()
-                                            .gap_1()
-                                            .child(
-                                                div()
-                                                    .text_xs()
-                                                    .font_weight(FontWeight::MEDIUM)
-                                                    .text_color(theme.text_secondary)
-                                                    .child("Editor Font Family"),
-                                            )
-                                            .child(
-                                                div()
-                                                    .flex()
-                                                    .flex_wrap()
-                                                    .gap_1p5()
-                                                    .children(font_buttons),
-                                            ),
-                                    )
-                                    .child(
-                                        div()
-                                            .flex()
-                                            .flex_col()
-                                            .gap_1()
-                                            .child(
-                                                div()
-                                                    .text_xs()
-                                                    .font_weight(FontWeight::MEDIUM)
-                                                    .text_color(theme.text_secondary)
-                                                    .child("Editor Font Size"),
-                                            )
-                                            .child(
-                                                div()
-                                                    .flex()
-                                                    .flex_wrap()
-                                                    .gap_1p5()
-                                                    .children(size_buttons),
-                                            ),
-                                    ),
-                            )
-                            // 4. 底部杂项
-                            .child(
-                                div()
-                                    .pt_2()
-                                    .border_t_1()
-                                    .border_color(theme.border_subtle)
-                                    .flex()
-                                    .items_center()
-                                    .justify_between()
-                                    .child(
-                                        div()
-                                            .flex()
-                                            .flex_col()
-                                            .gap_1()
-                                            .child(
-                                                div()
-                                                    .text_xs()
-                                                    .font_weight(FontWeight::MEDIUM)
-                                                    .text_color(theme.text_secondary)
-                                                    .child("Tab Indent Size"),
-                                            )
-                                            .child(div().flex().gap_1p5().children(tab_buttons)),
-                                    )
-                                    .child(
-                                        div()
-                                            .flex()
-                                            .flex_col()
-                                            .gap_1()
-                                            .items_end()
-                                            .child(
-                                                div()
-                                                    .text_xs()
-                                                    .font_weight(FontWeight::MEDIUM)
-                                                    .text_color(theme.text_secondary)
-                                                    .child("Line Numbers"),
-                                            )
-                                            .child(line_num_toggle),
-                                    ),
-                            ),
-                    ),
-            )
+            .child(modal_card)
+            .into_any_element()
     }
 }
