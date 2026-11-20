@@ -69,6 +69,8 @@ pub fn minimize_window(window: &Window) {
 }
 
 pub fn start_window_drag(window: &Window) {
+    #[cfg(not(target_os = "windows"))]
+    let _ = window;
     #[cfg(target_os = "windows")]
     if let Some(hwnd) = get_window_hwnd(window) {
         unsafe {
