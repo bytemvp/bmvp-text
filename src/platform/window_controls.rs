@@ -2,6 +2,15 @@ use gpui::Window;
 #[cfg(target_os = "windows")]
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 
+pub const PRIMARY_MODIFIER_LABEL: &str = if cfg!(target_os = "macos") {
+    "Cmd"
+} else {
+    "Ctrl"
+};
+
+pub const USES_MACOS_TRAFFIC_LIGHTS: bool = cfg!(target_os = "macos");
+pub const MACOS_TRAFFIC_LIGHT_PADDING_PX: f32 = 76.0;
+
 #[cfg(target_os = "windows")]
 #[repr(C)]
 struct Point {

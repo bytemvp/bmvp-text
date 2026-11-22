@@ -1,6 +1,6 @@
 [package]
 name = "bmvp-text"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 authors = ["ByteMVP Team <dev@bytemvp.com>"]
 description = "A lightweight, high-performance code editor inspired by Zed, built with pure Rust and GPUI."
@@ -19,6 +19,7 @@ walkdir = "2.5.0"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 raw-window-handle = "0.6"
+regex = "1"
 
 [profile.release]
 opt-level = 3

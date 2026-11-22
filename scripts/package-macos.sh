@@ -1,15 +1,21 @@
 #!/usr/bin/env bash
-# macOS packaging script: builds release binary, .app bundle, and .dmg
+# macOS packaging script: builds release binary, .app bundle, and .dmg / .tar.gz
 set -euo pipefail
 
 TARGET="${1:-aarch64-apple-darwin}"
-VERSION="${2:-0.1.0}"
+VERSION="${2:-0.2.0}"
+ARTIFACT_NAME="${3:-bmvp-text-${TARGET}}"
+SKIP_BUILD="${SKIP_BUILD:-0}"
 APP_NAME="bmvp-text"
 DIST_DIR="dist"
 APP_DIR="${DIST_DIR}/${APP_NAME}.app"
 
-echo "==> [1/3] Building release binary for ${TARGET}..."
-cargo build --release --target "${TARGET}"
+if [[ "${SKIP_BUILD}" != "1" ]]; then
+    echo "==> [1/3] Building release binary for ${TARGET}..."
+    cargo build --release --target "${TARGET}"
+else
+    echo "==> [1/3] Using prebuilt release binary for ${TARGET}..."
+fi
 
 echo "==> [2/3] Constructing macOS .app bundle..."
 rm -rf "${APP_DIR}"
@@ -54,12 +60,12 @@ if command -v create-dmg &>/dev/null; then
         --window-size 600 400 \
         --icon-size 120 \
         --app-drop-link 420 200 \
-        "${DIST_DIR}/${APP_NAME}-${TARGET}.dmg" \
+        "${DIST_DIR}/${ARTIFACT_NAME}.dmg" \
         "${APP_DIR}"
-    echo "==> Created DMG at ${DIST_DIR}/${APP_NAME}-${TARGET}.dmg"
+    echo "==> Created DMG at ${DIST_DIR}/${ARTIFACT_NAME}.dmg"
 else
-    tar -czf "${DIST_DIR}/${APP_NAME}-${TARGET}.tar.gz" -C "${DIST_DIR}" "${APP_NAME}.app"
-    echo "==> Created archive at ${DIST_DIR}/${APP_NAME}-${TARGET}.tar.gz"
+    tar -czf "${DIST_DIR}/${ARTIFACT_NAME}.tar.gz" -C "${DIST_DIR}" "${APP_NAME}.app"
+    echo "==> Created archive at ${DIST_DIR}/${ARTIFACT_NAME}.tar.gz"
 fi
 
 echo "==> macOS build complete!"

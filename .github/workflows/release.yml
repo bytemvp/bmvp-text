@@ -134,86 +134,33 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          $ProgressPreference = 'SilentlyContinue'
-          $bin = "target/${{ matrix.target }}/release/bmvp-text${{ matrix.ext }}"
-          $dir = "dist/${{ matrix.artifact }}"
-          New-Item -ItemType Directory -Path $dir -Force
-          Copy-Item $bin $dir/
-          Copy-Item README.md $dir/ -ErrorAction SilentlyContinue
-          Copy-Item LICENSE $dir/ -ErrorAction SilentlyContinue
-          tar.exe -a -c -f "dist/${{ matrix.artifact }}.zip" -C dist "${{ matrix.artifact }}"
+          ./scripts/package-windows.ps1 `
+            -Target "${{ matrix.target }}" `
+            -Version "${{ env.PKG_VERSION }}" `
+            -ArtifactName "${{ matrix.artifact }}" `
+            -SkipBuild
 
       # ── Package: macOS (.dmg via create-dmg or .tar.gz fallback) ──
       - name: Package macOS
         if: runner.os == 'macOS'
+        shell: bash
         run: |
-          APP_DIR="dist/bmvp-text.app/Contents/MacOS"
-          mkdir -p "$APP_DIR"
-          cp "target/${{ matrix.target }}/release/bmvp-text${{ matrix.ext }}" "$APP_DIR/"
-          # Create minimal Info.plist
-          cat > "dist/bmvp-text.app/Contents/Info.plist" << EOF
-          <?xml version="1.0" encoding="UTF-8"?>
-          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-          <plist version="1.0">
-          <dict>
-            <key>CFBundleName</key>
-            <string>bmvp-text</string>
-            <key>CFBundleDisplayName</key>
-            <string>bmvp-text</string>
-            <key>CFBundleIdentifier</key>
-            <string>com.bytemvp.bmvp-text</string>
-            <key>CFBundleVersion</key>
-            <string>${PKG_VERSION}</string>
-            <key>CFBundleShortVersionString</key>
-            <string>${PKG_VERSION}</string>
-            <key>CFBundleExecutable</key>
-            <string>bmvp-text</string>
-            <key>CFBundlePackageType</key>
-            <string>APPL</string>
-            <key>NSHighResolutionCapable</key>
-            <true/>
-          </dict>
-          </plist>
-          EOF
-          # Try to create .dmg, fallback to tar.gz
-          if command -v create-dmg &>/dev/null; then
-            create-dmg \
-              --volname "bmvp-text" \
-              --window-size 600 400 \
-              --icon-size 128 \
-              "dist/${{ matrix.artifact }}.dmg" \
-              "dist/bmvp-text.app"
-          else
-            tar -czf "dist/${{ matrix.artifact }}.tar.gz" -C dist bmvp-text.app
-          fi
+          chmod +x ./scripts/package-macos.sh
+          SKIP_BUILD=1 ./scripts/package-macos.sh \
+            "${{ matrix.target }}" \
+            "${{ env.PKG_VERSION }}" \
+            "${{ matrix.artifact }}"
 
       # ── Package: Linux (.tar.gz + .deb) ──
       - name: Package Linux
         if: runner.os == 'Linux'
+        shell: bash
         run: |
-          mkdir -p "dist/${{ matrix.artifact }}"
-          cp "target/${{ matrix.target }}/release/bmvp-text${{ matrix.ext }}" "dist/${{ matrix.artifact }}/"
-          cp README.md "dist/${{ matrix.artifact }}/" 2>/dev/null || true
-          cp LICENSE "dist/${{ matrix.artifact }}/" 2>/dev/null || true
-          tar -czf "dist/${{ matrix.artifact }}.tar.gz" -C dist "${{ matrix.artifact }}"
-
-          # Build .deb package
-          VERSION="${PKG_VERSION}"
-          DEB_DIR="dist/deb"
-          mkdir -p "$DEB_DIR/DEBIAN"
-          mkdir -p "$DEB_DIR/usr/local/bin"
-          cp "target/${{ matrix.target }}/release/bmvp-text" "$DEB_DIR/usr/local/bin/"
-          cat > "$DEB_DIR/DEBIAN/control" << EOF
-          Package: bmvp-text
-          Version: ${VERSION}
-          Architecture: amd64
-          Maintainer: ByteMVP <dev@bytemvp.com>
-          Description: A lightweight, high-performance code editor inspired by Zed
-           Pure Rust + GPUI, zero AI bloat, instant response.
-          Section: editors
-          Priority: optional
-          EOF
-          dpkg-deb --build "$DEB_DIR" "dist/${{ matrix.artifact }}.deb"
+          chmod +x ./scripts/package-linux.sh
+          SKIP_BUILD=1 ./scripts/package-linux.sh \
+            "${{ matrix.target }}" \
+            "${{ env.PKG_VERSION }}" \
+            "${{ matrix.artifact }}"
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4

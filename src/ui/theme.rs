@@ -29,6 +29,18 @@ impl ThemeMode {
     }
 }
 
+#[derive(Clone, Debug)]
+pub struct SyntaxColors {
+    pub keyword: Hsla,
+    pub type_name: Hsla,
+    pub function: Hsla,
+    pub string: Hsla,
+    pub number: Hsla,
+    pub comment: Hsla,
+    pub operator: Hsla,
+    pub default: Hsla,
+}
+
 #[derive(Clone)]
 pub struct Theme {
     pub mode: ThemeMode,
@@ -62,6 +74,9 @@ pub struct Theme {
     pub selection: Hsla,       // 选区颜色
     pub dirty_indicator: Hsla, // 修改黄点
     pub error: Hsla,           // 错误红
+
+    // 主题级语法高亮色板
+    pub syntax: SyntaxColors,
 }
 
 impl Default for Theme {
@@ -85,6 +100,9 @@ impl Theme {
     }
 
     pub fn zed_light() -> Self {
+        let text_primary: Hsla = rgb(0x24292e).into();
+        let text_secondary: Hsla = rgb(0x57606a).into();
+        let text_muted: Hsla = rgb(0x8c959f).into();
         Self {
             mode: ThemeMode::ZedLight,
             bg_app: rgb(0xebebeb).into(),
@@ -103,9 +121,9 @@ impl Theme {
             border: rgb(0xd0d0d0).into(),
             border_subtle: rgb(0xdcdcdc).into(),
 
-            text_primary: rgb(0x24292e).into(),
-            text_secondary: rgb(0x57606a).into(),
-            text_muted: rgb(0x8c959f).into(),
+            text_primary,
+            text_secondary,
+            text_muted,
             text_on_accent: rgb(0xffffff).into(),
 
             accent: rgb(0x0969da).into(),
@@ -113,10 +131,24 @@ impl Theme {
             selection: rgba(0x0969da28).into(),
             dirty_indicator: rgb(0xd97706).into(),
             error: rgb(0xcf222e).into(),
+
+            syntax: SyntaxColors {
+                keyword: rgb(0xa626a4).into(),
+                type_name: rgb(0xc18401).into(),
+                function: rgb(0x4078f2).into(),
+                string: rgb(0x50a14f).into(),
+                number: rgb(0x986801).into(),
+                comment: text_muted,
+                operator: text_secondary,
+                default: text_primary,
+            },
         }
     }
 
     pub fn zed_dark() -> Self {
+        let text_primary: Hsla = rgb(0xf4f4f5).into();
+        let text_secondary: Hsla = rgb(0x9ca3af).into();
+        let text_muted: Hsla = rgb(0x52525b).into();
         Self {
             mode: ThemeMode::ZedDark,
             bg_app: rgb(0x18181b).into(),
@@ -135,9 +167,9 @@ impl Theme {
             border: rgb(0x282832).into(),
             border_subtle: rgb(0x232329).into(),
 
-            text_primary: rgb(0xf4f4f5).into(),
-            text_secondary: rgb(0x9ca3af).into(),
-            text_muted: rgb(0x52525b).into(),
+            text_primary,
+            text_secondary,
+            text_muted,
             text_on_accent: rgb(0x09090b).into(),
 
             accent: rgb(0x38bdf8).into(),
@@ -145,10 +177,24 @@ impl Theme {
             selection: rgba(0x38bdf838).into(),
             dirty_indicator: rgb(0xf59e0b).into(),
             error: rgb(0xf43f5e).into(),
+
+            syntax: SyntaxColors {
+                keyword: rgb(0xec7279).into(),
+                type_name: rgb(0xfbbf24).into(),
+                function: rgb(0x38bdf8).into(),
+                string: rgb(0x4ade80).into(),
+                number: rgb(0xfb923c).into(),
+                comment: rgb(0x71717a).into(),
+                operator: text_secondary,
+                default: text_primary,
+            },
         }
     }
 
     pub fn one_dark() -> Self {
+        let text_primary: Hsla = rgb(0xabb2bf).into();
+        let text_secondary: Hsla = rgb(0x828997).into();
+        let text_muted: Hsla = rgb(0x5c6370).into();
         Self {
             mode: ThemeMode::OneDark,
             bg_app: rgb(0x1e2227).into(),
@@ -167,9 +213,9 @@ impl Theme {
             border: rgb(0x383e4a).into(),
             border_subtle: rgb(0x2b3038).into(),
 
-            text_primary: rgb(0xabb2bf).into(),
-            text_secondary: rgb(0x828997).into(),
-            text_muted: rgb(0x5c6370).into(),
+            text_primary,
+            text_secondary,
+            text_muted,
             text_on_accent: rgb(0x09090b).into(),
 
             accent: rgb(0x61afef).into(),
@@ -177,10 +223,24 @@ impl Theme {
             selection: rgba(0x61afef38).into(),
             dirty_indicator: rgb(0xe5c07b).into(),
             error: rgb(0xe06c75).into(),
+
+            syntax: SyntaxColors {
+                keyword: rgb(0xc678dd).into(),
+                type_name: rgb(0xe5c07b).into(),
+                function: rgb(0x61afef).into(),
+                string: rgb(0x98c379).into(),
+                number: rgb(0xd19a66).into(),
+                comment: text_muted,
+                operator: rgb(0x56b6c2).into(),
+                default: text_primary,
+            },
         }
     }
 
     pub fn nord() -> Self {
+        let text_primary: Hsla = rgb(0xeceff4).into();
+        let text_secondary: Hsla = rgb(0xd8dee9).into();
+        let text_muted: Hsla = rgb(0x4c566a).into();
         Self {
             mode: ThemeMode::Nord,
             bg_app: rgb(0x242933).into(),
@@ -199,9 +259,9 @@ impl Theme {
             border: rgb(0x4c566a).into(),
             border_subtle: rgb(0x3b4252).into(),
 
-            text_primary: rgb(0xeceff4).into(),
-            text_secondary: rgb(0xd8dee9).into(),
-            text_muted: rgb(0x4c566a).into(),
+            text_primary,
+            text_secondary,
+            text_muted,
             text_on_accent: rgb(0x09090b).into(),
 
             accent: rgb(0x88c0d0).into(),
@@ -209,6 +269,17 @@ impl Theme {
             selection: rgba(0x88c0d038).into(),
             dirty_indicator: rgb(0xebcb8b).into(),
             error: rgb(0xbf616a).into(),
+
+            syntax: SyntaxColors {
+                keyword: rgb(0x81a1c1).into(),
+                type_name: rgb(0x8fbcbb).into(),
+                function: rgb(0x88c0d0).into(),
+                string: rgb(0xa3be8c).into(),
+                number: rgb(0xb48ead).into(),
+                comment: rgb(0x616e88).into(),
+                operator: rgb(0x81a1c1).into(),
+                default: text_primary,
+            },
         }
     }
 }

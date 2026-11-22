@@ -1,11 +1,28 @@
-use crate::settings::EditorSettings;
-use crate::theme::{Theme, ThemeMode};
+use crate::config::settings::EditorSettings;
+use crate::ui::theme::{Theme, ThemeMode};
+use crate::ui::{UiAction, UiAction1, UiAction2};
 use gpui::*;
+use std::rc::Rc;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FontDropdownTarget {
     Editor,
     Terminal,
+}
+
+pub struct SettingsModalCallbacks {
+    pub on_close: UiAction,
+    pub on_dismiss_dropdown: UiAction,
+    pub on_backdrop_click: UiAction,
+    pub on_select_theme: UiAction1<ThemeMode>,
+    pub on_select_shell: UiAction1<String>,
+    pub on_toggle_font_dropdown: UiAction1<FontDropdownTarget>,
+    pub on_select_font: UiAction2<FontDropdownTarget, String>,
+    pub on_scroll_font_dropdown: UiAction2<i32, usize>,
+    pub on_select_terminal_font_size: UiAction1<f32>,
+    pub on_select_editor_font_size: UiAction1<f32>,
+    pub on_select_tab_size: UiAction1<usize>,
+    pub on_toggle_line_numbers: UiAction,
 }
 
 pub struct SettingsModal;
@@ -77,7 +94,7 @@ impl SettingsModal {
         is_open: bool,
         total_fonts: usize,
         theme: &Theme,
-        cx: &Context<crate::editor::EditorView>,
+        on_toggle: UiAction1<FontDropdownTarget>,
     ) -> AnyElement {
         let font_preview = current_font.to_string();
         let font_label = current_font.to_string();
@@ -119,21 +136,10 @@ impl SettingsModal {
                     .flex()
                     .items_center()
                     .justify_between()
-                    .on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(move |this, _, _win, cx| {
-                            this.ensure_system_fonts_loaded(cx);
-                            if this.open_font_dropdown == Some(target) {
-                                this.open_font_dropdown = None;
-                            } else {
-                                this.open_font_dropdown = Some(target);
-                            }
-                            this.font_dropdown_query.clear();
-                            this.font_dropdown_scroll = 0;
-                            cx.stop_propagation();
-                            cx.notify();
-                        }),
-                    )
+                    .on_mouse_down(MouseButton::Left, move |_, win, cx| {
+                        cx.stop_propagation();
+                        on_toggle(target, win, cx);
+                    })
                     .child(
                         div()
                             .text_xs()
@@ -155,6 +161,7 @@ impl SettingsModal {
             .into_any_element()
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn render_font_dropdown_menu(
         target: FontDropdownTarget,
         current_font: &str,
@@ -162,7 +169,8 @@ impl SettingsModal {
         query: &str,
         scroll_offset: usize,
         theme: &Theme,
-        cx: &Context<crate::editor::EditorView>,
+        on_select: UiAction2<FontDropdownTarget, String>,
+        on_scroll: UiAction2<i32, usize>,
     ) -> AnyElement {
         let q = query.trim().to_lowercase();
         let filtered: Vec<&String> = if q.is_empty() {
@@ -199,6 +207,7 @@ impl SettingsModal {
                 let chosen = font_name.clone();
                 let preview_font = font_name.clone();
                 let label = font_name.clone();
+                let on_select = Rc::clone(&on_select);
 
                 rows.push(
                     div()
@@ -214,25 +223,10 @@ impl SettingsModal {
                             theme.bg_modal
                         })
                         .hover(|s| s.bg(theme.bg_hover))
-                        .on_mouse_down(
-                            MouseButton::Left,
-                            cx.listener(move |this, _, _win, cx| {
-                                match target {
-                                    FontDropdownTarget::Terminal => {
-                                        this.settings.terminal_font_family = chosen.clone();
-                                    }
-                                    FontDropdownTarget::Editor => {
-                                        this.settings.font_family = chosen.clone();
-                                    }
-                                }
-                                this.open_font_dropdown = None;
-                                this.font_dropdown_query.clear();
-                                this.font_dropdown_scroll = 0;
-                                this.save_config();
-                                cx.stop_propagation();
-                                cx.notify();
-                            }),
-                        )
+                        .on_mouse_down(MouseButton::Left, move |_, win, cx| {
+                            cx.stop_propagation();
+                            on_select(target, chosen.clone(), win, cx);
+                        })
                         .child(
                             div()
                                 .text_xs()
@@ -309,22 +303,17 @@ impl SettingsModal {
             .occlude()
             .on_mouse_down(MouseButton::Left, |_, _, cx| {
                 cx.stop_propagation();
-            }) // 阻止冒泡到弹窗和背景遮罩
-            .on_scroll_wheel(
-                cx.listener(move |this, event: &ScrollWheelEvent, _win, cx| {
-                    let delta_y = match event.delta {
-                        ScrollDelta::Pixels(p) => (p.y / px(20.0)) as i32,
-                        ScrollDelta::Lines(l) => l.y as i32,
-                    };
-                    if delta_y < 0 {
-                        this.font_dropdown_scroll = (this.font_dropdown_scroll + 2).min(max_scroll);
-                    } else if delta_y > 0 {
-                        this.font_dropdown_scroll = this.font_dropdown_scroll.saturating_sub(2);
-                    }
-                    cx.stop_propagation();
-                    cx.notify();
-                }),
-            )
+            })
+            .on_scroll_wheel(move |event: &ScrollWheelEvent, win, cx| {
+                let delta_y = match event.delta {
+                    ScrollDelta::Pixels(p) => (p.y / px(20.0)) as i32,
+                    ScrollDelta::Lines(l) => l.y as i32,
+                };
+                if delta_y != 0 {
+                    on_scroll(delta_y, max_scroll, win, cx);
+                }
+                cx.stop_propagation();
+            })
             .child(search_bar)
             .child(div().flex().flex_col().py_1().children(rows));
 
@@ -336,7 +325,7 @@ impl SettingsModal {
         panel.into_any_element()
     }
 
-    fn render_header(theme: &Theme, cx: &Context<crate::editor::EditorView>) -> AnyElement {
+    fn render_header(theme: &Theme, on_close: UiAction) -> AnyElement {
         div()
             .h(px(40.0))
             .px_4()
@@ -379,25 +368,20 @@ impl SettingsModal {
                     .text_color(theme.text_muted)
                     .text_xs()
                     .child("✕")
-                    .on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(|this, _, _win, cx| {
-                            this.show_settings = false;
-                            this.open_font_dropdown = None;
-                            this.font_dropdown_query.clear();
-                            cx.stop_propagation();
-                            cx.notify();
-                        }),
-                    ),
+                    .on_mouse_down(MouseButton::Left, move |_, win, cx| {
+                        cx.stop_propagation();
+                        on_close(win, cx);
+                    }),
             )
             .into_any_element()
     }
 
-    fn render_theme_section(theme: &Theme, cx: &Context<crate::editor::EditorView>) -> AnyElement {
+    fn render_theme_section(theme: &Theme, on_select_theme: UiAction1<ThemeMode>) -> AnyElement {
         let current_theme = theme.mode;
         let theme_buttons: Vec<AnyElement> = ThemeMode::all()
             .iter()
             .map(|&mode| {
+                let on_select = Rc::clone(&on_select_theme);
                 Self::render_option_pill(
                     mode.name(),
                     None,
@@ -405,9 +389,10 @@ impl SettingsModal {
                     true,
                     false,
                     theme,
-                    cx.listener(move |this, _, _win, cx| {
-                        this.set_theme_mode(mode, cx);
-                    }),
+                    move |_, win, cx| {
+                        cx.stop_propagation();
+                        on_select(mode, win, cx);
+                    },
                 )
             })
             .collect();
@@ -420,7 +405,7 @@ impl SettingsModal {
         theme: &Theme,
         total_fonts: usize,
         is_font_dropdown_open: bool,
-        cx: &Context<crate::editor::EditorView>,
+        callbacks: &SettingsModalCallbacks,
     ) -> AnyElement {
         let current_shell = &settings.terminal_shell;
         let current_term_size = settings.terminal_font_size;
@@ -429,6 +414,7 @@ impl SettingsModal {
             .iter()
             .map(|&(shell_title, shell_bin)| {
                 let bin_name = shell_bin.to_string();
+                let on_shell = Rc::clone(&callbacks.on_select_shell);
                 Self::render_option_pill(
                     shell_title,
                     None,
@@ -436,12 +422,10 @@ impl SettingsModal {
                     true,
                     false,
                     theme,
-                    cx.listener(move |this, _, _win, cx| {
-                        this.settings.terminal_shell = bin_name.clone();
-                        this.restart_terminal();
-                        this.save_config();
-                        cx.notify();
-                    }),
+                    move |_, win, cx| {
+                        cx.stop_propagation();
+                        on_shell(bin_name.clone(), win, cx);
+                    },
                 )
             })
             .collect();
@@ -449,6 +433,7 @@ impl SettingsModal {
         let term_size_buttons: Vec<AnyElement> = EditorSettings::AVAILABLE_FONT_SIZES
             .iter()
             .map(|&size| {
+                let on_size = Rc::clone(&callbacks.on_select_terminal_font_size);
                 Self::render_option_pill(
                     format!("{:.0}", size),
                     None,
@@ -456,11 +441,10 @@ impl SettingsModal {
                     false,
                     true,
                     theme,
-                    cx.listener(move |this, _, _win, cx| {
-                        this.settings.terminal_font_size = size;
-                        this.save_config();
-                        cx.notify();
-                    }),
+                    move |_, win, cx| {
+                        cx.stop_propagation();
+                        on_size(size, win, cx);
+                    },
                 )
             })
             .collect();
@@ -491,7 +475,7 @@ impl SettingsModal {
                 is_font_dropdown_open,
                 total_fonts,
                 theme,
-                cx,
+                Rc::clone(&callbacks.on_toggle_font_dropdown),
             ))
             .child(Self::render_field(
                 "Terminal Font Size",
@@ -506,13 +490,14 @@ impl SettingsModal {
         theme: &Theme,
         total_fonts: usize,
         is_font_dropdown_open: bool,
-        cx: &Context<crate::editor::EditorView>,
+        callbacks: &SettingsModalCallbacks,
     ) -> AnyElement {
         let current_size = settings.font_size;
 
         let size_buttons: Vec<AnyElement> = EditorSettings::AVAILABLE_FONT_SIZES
             .iter()
             .map(|&size| {
+                let on_size = Rc::clone(&callbacks.on_select_editor_font_size);
                 Self::render_option_pill(
                     format!("{:.0}", size),
                     None,
@@ -520,11 +505,10 @@ impl SettingsModal {
                     false,
                     true,
                     theme,
-                    cx.listener(move |this, _, _win, cx| {
-                        this.settings.font_size = size;
-                        this.save_config();
-                        cx.notify();
-                    }),
+                    move |_, win, cx| {
+                        cx.stop_propagation();
+                        on_size(size, win, cx);
+                    },
                 )
             })
             .collect();
@@ -550,7 +534,7 @@ impl SettingsModal {
                 is_font_dropdown_open,
                 total_fonts,
                 theme,
-                cx,
+                Rc::clone(&callbacks.on_toggle_font_dropdown),
             ))
             .child(Self::render_field("Editor Font Size", size_buttons, theme))
             .into_any_element()
@@ -559,7 +543,7 @@ impl SettingsModal {
     fn render_misc_section(
         settings: &EditorSettings,
         theme: &Theme,
-        cx: &Context<crate::editor::EditorView>,
+        callbacks: &SettingsModalCallbacks,
     ) -> AnyElement {
         let current_tab = settings.tab_size;
         let show_line_num = settings.show_line_numbers;
@@ -567,6 +551,7 @@ impl SettingsModal {
         let tab_buttons: Vec<AnyElement> = EditorSettings::AVAILABLE_TAB_SIZES
             .iter()
             .map(|&tab_size| {
+                let on_tab = Rc::clone(&callbacks.on_select_tab_size);
                 Self::render_option_pill(
                     format!("{} spaces", tab_size),
                     None,
@@ -574,15 +559,15 @@ impl SettingsModal {
                     false,
                     false,
                     theme,
-                    cx.listener(move |this, _, _win, cx| {
-                        this.settings.tab_size = tab_size;
-                        this.save_config();
-                        cx.notify();
-                    }),
+                    move |_, win, cx| {
+                        cx.stop_propagation();
+                        on_tab(tab_size, win, cx);
+                    },
                 )
             })
             .collect();
 
+        let on_line_num = Rc::clone(&callbacks.on_toggle_line_numbers);
         let line_num_toggle = Self::render_option_pill(
             if show_line_num { "Enabled" } else { "Disabled" },
             None,
@@ -590,11 +575,10 @@ impl SettingsModal {
             false,
             false,
             theme,
-            cx.listener(|this, _, _win, cx| {
-                this.settings.show_line_numbers = !this.settings.show_line_numbers;
-                this.save_config();
-                cx.notify();
-            }),
+            move |_, win, cx| {
+                cx.stop_propagation();
+                on_line_num(win, cx);
+            },
         );
 
         div()
@@ -630,7 +614,7 @@ impl SettingsModal {
         open_dropdown: Option<FontDropdownTarget>,
         dropdown_query: &str,
         dropdown_scroll: usize,
-        cx: &Context<crate::editor::EditorView>,
+        callbacks: SettingsModalCallbacks,
     ) -> AnyElement {
         let total_fonts = system_fonts.len();
 
@@ -646,9 +630,15 @@ impl SettingsModal {
                 dropdown_query,
                 dropdown_scroll,
                 theme,
-                cx,
+                Rc::clone(&callbacks.on_select_font),
+                Rc::clone(&callbacks.on_scroll_font_dropdown),
             )
         });
+
+        let on_dismiss = Rc::clone(&callbacks.on_dismiss_dropdown);
+        let on_backdrop = Rc::clone(&callbacks.on_backdrop_click);
+        let on_close = Rc::clone(&callbacks.on_close);
+        let on_theme = Rc::clone(&callbacks.on_select_theme);
 
         let modal_card = div()
             .relative()
@@ -659,18 +649,11 @@ impl SettingsModal {
             .border_color(theme.border)
             .shadow_lg()
             .occlude()
-            .on_mouse_down(
-                MouseButton::Left,
-                cx.listener(|this, _, _win, cx| {
-                    if this.open_font_dropdown.is_some() {
-                        this.open_font_dropdown = None;
-                        this.font_dropdown_query.clear();
-                        cx.notify();
-                    }
-                    cx.stop_propagation();
-                }),
-            )
-            .child(Self::render_header(theme, cx))
+            .on_mouse_down(MouseButton::Left, move |_, win, cx| {
+                cx.stop_propagation();
+                on_dismiss(win, cx);
+            })
+            .child(Self::render_header(theme, on_close))
             .child(
                 div()
                     .p_4()
@@ -678,22 +661,22 @@ impl SettingsModal {
                     .flex()
                     .flex_col()
                     .gap_3p5()
-                    .child(Self::render_theme_section(theme, cx))
+                    .child(Self::render_theme_section(theme, on_theme))
                     .child(Self::render_terminal_section(
                         settings,
                         theme,
                         total_fonts,
                         open_dropdown == Some(FontDropdownTarget::Terminal),
-                        cx,
+                        &callbacks,
                     ))
                     .child(Self::render_editor_section(
                         settings,
                         theme,
                         total_fonts,
                         open_dropdown == Some(FontDropdownTarget::Editor),
-                        cx,
+                        &callbacks,
                     ))
-                    .child(Self::render_misc_section(settings, theme, cx)),
+                    .child(Self::render_misc_section(settings, theme, &callbacks)),
             )
             .children(dropdown_overlay)
             .into_any_element();
@@ -711,19 +694,10 @@ impl SettingsModal {
                 hsla(0.0, 0.0, 0.0, 0.65)
             })
             .occlude()
-            .on_mouse_down(
-                MouseButton::Left,
-                cx.listener(|this, _, _win, cx| {
-                    if this.open_font_dropdown.is_some() {
-                        this.open_font_dropdown = None;
-                        this.font_dropdown_query.clear();
-                    } else {
-                        this.show_settings = false;
-                    }
-                    cx.stop_propagation();
-                    cx.notify();
-                }),
-            )
+            .on_mouse_down(MouseButton::Left, move |_, win, cx| {
+                cx.stop_propagation();
+                on_backdrop(win, cx);
+            })
             .child(modal_card)
             .into_any_element()
     }

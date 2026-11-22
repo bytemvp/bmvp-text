@@ -3,15 +3,21 @@
 set -euo pipefail
 
 TARGET="${1:-x86_64-unknown-linux-gnu}"
-VERSION="${2:-0.1.0}"
+VERSION="${2:-0.2.0}"
+ARTIFACT_NAME="${3:-bmvp-text-linux-x64}"
+SKIP_BUILD="${SKIP_BUILD:-0}"
 APP_NAME="bmvp-text"
 DIST_DIR="dist"
 
-echo "==> [1/3] Building release binary for ${TARGET}..."
-cargo build --release --target "${TARGET}"
+if [[ "${SKIP_BUILD}" != "1" ]]; then
+    echo "==> [1/3] Building release binary for ${TARGET}..."
+    cargo build --release --target "${TARGET}"
+else
+    echo "==> [1/3] Using prebuilt release binary for ${TARGET}..."
+fi
 
 echo "==> [2/3] Creating portable tar.gz archive..."
-ARCHIVE_DIR="${DIST_DIR}/${APP_NAME}-linux-x64"
+ARCHIVE_DIR="${DIST_DIR}/${ARTIFACT_NAME}"
 rm -rf "${ARCHIVE_DIR}"
 mkdir -p "${ARCHIVE_DIR}"
 
@@ -21,8 +27,8 @@ cp "LICENSE" "${ARCHIVE_DIR}/" 2>/dev/null || true
 cp "assets/bmvp-text.desktop" "${ARCHIVE_DIR}/" 2>/dev/null || true
 cp "assets/icon.svg" "${ARCHIVE_DIR}/" 2>/dev/null || true
 
-tar -czf "${DIST_DIR}/${APP_NAME}-linux-x64.tar.gz" -C "${DIST_DIR}" "${APP_NAME}-linux-x64"
-echo "==> Created ${DIST_DIR}/${APP_NAME}-linux-x64.tar.gz"
+tar -czf "${DIST_DIR}/${ARTIFACT_NAME}.tar.gz" -C "${DIST_DIR}" "${ARTIFACT_NAME}"
+echo "==> Created ${DIST_DIR}/${ARTIFACT_NAME}.tar.gz"
 
 echo "==> [3/3] Building Debian (.deb) package..."
 DEB_DIR="${DIST_DIR}/deb_pkg"
@@ -51,7 +57,7 @@ Description: Lightweight high-performance code editor inspired by Zed
  Pure Rust + GPUI 0.2, zero AI bloat, instant response.
 EOF
 
-dpkg-deb --build --root-owner-group "${DEB_DIR}" "${DIST_DIR}/${APP_NAME}_${VERSION}_amd64.deb"
-echo "==> Created Debian package at ${DIST_DIR}/${APP_NAME}_${VERSION}_amd64.deb"
+dpkg-deb --build --root-owner-group "${DEB_DIR}" "${DIST_DIR}/${ARTIFACT_NAME}.deb"
+echo "==> Created Debian package at ${DIST_DIR}/${ARTIFACT_NAME}.deb"
 
 echo "==> Linux packaging complete!"

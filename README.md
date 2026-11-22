@@ -50,11 +50,10 @@
    - **编辑区 ↔ 命令行**：横向 3px 隐形把手，支持垂直拖拽调整终端高度（`cursor_row_resize`），双击自动复位默认高度（240px）。
    - 尺寸实时自动持久化至本地用户设置。
 
-5. **原生系统级终端 Dock（Native Windows Terminal Dock）**：
-   - **毫秒级极速响应**：直接接入系统 `cmd.exe` 执行引擎，告别管道缓冲卡顿。
-   - **多命令行 Tab 管理**：支持创建多个终端标签（`>_ cmd 1`, `>_ cmd 2`），支持单独关闭或新建。
-   - **Profile 重载**：重新打开或点击 `⟳ 重载Profile` 时自动拉取最新系统环境变量。
-   - **独立窗口弹窗**：支持点击 `↗ 独立窗口` 一键呼出 Windows Terminal (wt.exe) 或独立 CMD。
+5. **内嵌系统终端 Dock（Embedded Terminal Dock）**：
+   - **事件驱动异步交互**：支持 `pwsh`、`powershell`、`cmd`、`bash`、`zsh`、`fish`，通过后台 Reader 线程与事件唤醒及时刷新输出，告别 50ms 空转轮询。
+   - **多命令行 Tab 与样式支持**：支持创建/关闭多个终端标签、ANSI 16/256/TrueColor 与粗体/斜体/下划线/反显（SGR 1/3/4/7）、`Shift + 滚轮` 横向滚动与 `Ctrl+Shift+C` 复制最近输出。
+   - **工作目录同步与独立窗口**：支持执行后同步工作目录，点击 `↗` 一键呼出系统外部终端（Windows `wt.exe`/`cmd`、macOS `Terminal.app`、Linux 主流终端模拟器）。
    - **系统经典黑底银字**：遵循控制台纯正暗色（`#0c0c0e`），内联命令行输入提示符。
 
 6. **Zed 风格底部状态栏（Status Bar）**：
@@ -64,26 +63,24 @@
 
 ## ⌨️ 常用快捷键列表
 
-| 快捷键 | 功能描述 |
+| 快捷键（Windows/Linux · macOS 使用 `Cmd`） | 功能描述 |
 | :--- | :--- |
-| **Ctrl + P** | 打开全局快速文件查找弹窗（File Finder / Quick Open） |
-| **Ctrl + F** | 打开/关闭文件内文本搜索框（Find in File） |
+| **Ctrl + P** | 打开全局快速文件查找弹窗（File Finder / Quick Open，支持模糊权重排序） |
+| **Ctrl + F** / **Ctrl + H** | 打开/关闭文件内查找框或查找替换面板（支持大小写/全词/正则 `Aa`/`W`/`.*`） |
 | **Ctrl + `** | 展开/收起底部交互式终端 Dock |
 | **Ctrl + ,** | 打开偏好设置弹窗（切换主题、字体、终端 Shell、Tab 宽度等） |
 | **Ctrl + B** | 展开/折叠左侧项目工程面板（Explorer） |
 | **Ctrl + O** | 打开系统文件选择对话框 |
-| **Ctrl + S** | 保存当前文件（未命名文件将弹出另存为对话框） |
-| **Ctrl + N** | 新建空白标签页 |
-| **Ctrl + W** | 关闭当前标签页（在终端获得焦点时关闭当前终端 Tab） |
+| **Ctrl + S** | 保存当前文件（原子写入；未命名文件弹出另存为对话框） |
+| **Ctrl + N** / **Ctrl + W** | 新建 / 关闭标签页（在终端获得焦点时关闭当前终端 Tab；未保存将弹窗保护确认） |
 | **Ctrl + T** | 在终端获得焦点时新建终端 Tab |
-| **Ctrl + Z** | 撤销编辑（Undo，内置 Rope 快照历史） |
-| **Ctrl + Y** / **Ctrl + Shift + Z** | 重做编辑（Redo） |
-| **Ctrl + C** | 复制选区（终端中为发送 `^C` 中断信号） |
-| **Ctrl + X** | 剪切选区到系统剪贴板 |
-| **Ctrl + V** | 粘贴剪贴板文本到编辑器或终端 |
+| **Ctrl + Shift + C** | 在终端获得焦点时复制最近终端输出行 |
+| **Ctrl + Z** / **Ctrl + Y** | 撤销 / 重做（也支持 `Ctrl + Shift + Z` 重做） |
+| **Ctrl + C** / **X** / **V** | 复制、剪切、粘贴（终端中 `Ctrl+C` 为中止当前命令，`Ctrl+V` 为粘贴） |
 | **Ctrl + A** | 全选当前文档 |
 | **Ctrl + D** | 快速复制当前行（Duplicate Line） |
 | **Ctrl + /** | 快速切换当前行注释（Toggle Comment） |
+| **Ctrl + Q** | 退出应用（存在未保存标签时触发确认保护） |
 | **Shift + 方向键** | 扩展/缩减文本选区 |
 | **Tab** | 插入设定宽度的空格缩进（终端中为文件名自动补全） |
 | **Enter** | 智能保持缩进换行（遇到 `{` 自动递进缩进） |
@@ -132,23 +129,26 @@
   chmod +x ./scripts/package-linux.sh
   ./scripts/package-linux.sh
   ```
-  产物位于 `dist/bmvp-text-linux-x64.tar.gz` 与 `dist/bmvp-text_0.1.0_amd64.deb`。
+  产物位于 `dist/bmvp-text-linux-x64.tar.gz` 与 `dist/bmvp-text-linux-x64.deb`。
 
 ---
 
 ## 🛠️ 本地开发与构建
 
-确保已安装 Rust 1.80+ 工具链：
+确保已安装 **Rust 1.88+** 工具链（项目使用 Edition `2024`、`let`-chains 与 `is_multiple_of` / `as_chunks`，已验证兼容最新稳定版及 `rustc 1.100.0`）：
 
 ```bash
-# 检查语法与编译
-cargo check
+# 检查格式化
+cargo fmt --all -- --check
 
-# 运行单元测试
-cargo test
+# 检查编译与 Clippy 零警告门禁
+cargo clippy --all-targets -- -D warnings
 
-# 启动编辑器
-cargo run
+# 运行全部单元测试与集成测试
+cargo test --all-targets
+
+# 启动编辑器（支持直接传入目录或文件路径）
+cargo run -- . src/main.rs
 
 # 构建高性能发布二进制
 cargo build --release
