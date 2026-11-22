@@ -1,7 +1,7 @@
 ; Inno Setup Script for bmvp-text
 #define MyAppName "bmvp-text"
 #ifndef MyAppVersion
-  #define MyAppVersion "0.2.0"
+  #define MyAppVersion "0.3.0"
 #endif
 #define MyAppPublisher "ByteMVP"
 #define MyAppURL "https://github.com/bytemvp/bmvp-text"

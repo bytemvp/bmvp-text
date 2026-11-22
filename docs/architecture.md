@@ -78,14 +78,16 @@ flowchart TD
 | `src/config/settings.rs` | 配置层 | `AppConfig` 与 `EditorSettings`（结构体级 `#[serde(default)]`、Windows/macOS/Linux 配置目录与默认字体/Shell、`save_to_path`） |
 | `src/platform/window_controls.rs` | 平台边界 | Win32 / macOS / Linux 原生窗口控制、macOS 交通灯间距与 `PRIMARY_MODIFIER_LABEL` 封装 |
 | `src/ui/mod.rs` | UI 基础 | UI 子模块声明与共享回调别名（`UiAction` / `UiAction1` / `UiAction2` / `UiMouseAction`） |
-| `src/ui/theme.rs` | UI 主题 | 四套 `ThemeMode`（`ZedLight`/`ZedDark`/`OneDark`/`Nord`）与各自独立的 `SyntaxColors` 色板 |
+| `src/ui/theme.rs` | UI 主题 | 四套 `ThemeMode`（`ZedLight`/`ZedDark`/`OneDark`/`Nord`）、语义化表面/遮罩/滚动条令牌与 `SyntaxColors` 色板 |
+| `src/ui/icons.rs` | UI 图标 | 零外部依赖的内嵌单色矢量 SVG 图标集（`EmbeddedAssets` 实现 `gpui::AssetSource`）与语义化文件类型徽章 |
+| `src/ui/scrollbar.rs` | UI 基础 | 极简垂直滚动条滑块计算与绘制组件（供编辑器、侧边栏与终端输出复用） |
 | `src/ui/editor_view.rs` | 根视图层 | `EditorView` 状态字段、初始化、回调组装与 `Render` 布局调度 |
 | `src/ui/editor_commands.rs` | 根视图层 | 标签页生命周期、未保存退出保护、文件对话框、查找替换、剪贴板与异步文件查找命令 |
 | `src/ui/editor_input.rs` | 根视图层 | 鼠标拖拽选区/缩放、7 级键盘路由与 `EntityInputHandler` IME 输入法对接 |
 | `src/ui/code_canvas.rs` | UI 组件 | GPUI 自定义 `Element` `CodeCanvas` 与 `CodeLayoutState`，结合 `HighlightCache` 绘制代码行与选区/光标 |
-| `src/ui/title_bar.rs` / `tab_bar.rs` / `breadcrumb.rs` | UI 组件 | 顶部标题栏、多标签页栏与工作区面包屑栏（纯回调解耦） |
-| `src/ui/sidebar_view.rs` / `terminal_dock.rs` / `status_bar.rs` | UI 组件 | 侧边栏视图、支持横向滚动与快捷复制的终端停靠栏、状态栏（纯回调解耦） |
-| `src/ui/find_replace.rs` / `file_finder.rs` / `settings_modal.rs` / `confirm_modal.rs` | UI 浮层 | 查找替换条、后台异步扫描+模糊打分排序 `FileFinder`、设置弹窗与未保存确认弹窗（纯回调解耦） |
+| `src/ui/title_bar.rs` / `tab_bar.rs` / `breadcrumb.rs` | UI 组件 | 顶部通栏标题栏（含项目/分支/居中快速搜索胶囊）、Zed 无缝标签页栏与文件路径面包屑栏（纯回调解耦） |
+| `src/ui/sidebar_view.rs` / `terminal_dock.rs` / `status_bar.rs` | UI 组件 | 侧边栏资源管理器（含当前文件高亮与缩进引导线）、多标签终端停靠栏、底部通栏状态栏（纯回调解耦） |
+| `src/ui/find_replace.rs` / `file_finder.rs` / `settings_modal.rs` / `confirm_modal.rs` | UI 浮层 | 查找替换条、后台异步扫描+模糊打分排序 `FileFinder`、分组卡片设置弹窗与未保存确认弹窗（纯回调解耦） |
 | `.github/workflows/` | CI/CD | `ci.yml`（三端 check/test/clippy/fmt）与 `release.yml`（tag 正式发布与 `main` `dev-latest` 预发布） |
 | `scripts/` 与 `package/windows/` | 打包脚本 | `package-windows.ps1` / `package-macos.sh` / `package-linux.sh` 与 Inno Setup 安装包配置 |
 | `tests/core_integration.rs` | 集成测试 | 纯内存/临时目录跨模块集成测试（缓存、主题、目录增量展开、模糊搜索、ANSI、Shell 转义、Git、配置兼容） |
@@ -105,8 +107,10 @@ flowchart LR
     ev --> widgets["ui::{title_bar, tab_bar, breadcrumb, sidebar_view, terminal_dock, status_bar, find_replace, file_finder, settings_modal, confirm_modal}"]
 
     widgets -->|"UiAction* 回调（无反向依赖）"| ev
+    widgets --> icons["ui::{icons, scrollbar}"]
+    icons --> theme["ui::theme"]
     canvas --> core
-    canvas --> theme["ui::theme"]
+    canvas --> theme
     core --> theme
     term --> cfg
     cfg --> theme
@@ -136,16 +140,18 @@ flowchart LR
 - **主题化配色映射**：`Theme` 结构体新增独立 `SyntaxColors` (`theme.syntax`)，`token_color(token_type, theme)` 直接读取当前主题的语法色板，使 `ZedLight`、`ZedDark`、`OneDark`、`Nord` 拥有各自差异化的语法高亮配色。
 
 ### 4.3 UI 布局与渲染管线（`src/ui/`）
-- **顶层视觉结构**：
-  - 根容器为水平 `flex_row`：左侧为可折叠的 `SidebarView` 面板与 2px 宽 `cursor_col_resize` 拖拽分隔条；右侧为 `flex_1` 纵向主区域。
-  - 右侧主区域从上到下依次堆叠：
-    1. `TitleBar`（`title_bar.rs`，32px）：侧边栏开关、项目名、空白拖拽区（单击拖拽窗口、双击最大化/还原）、快捷按钮及自定义窗口控制按钮。
-    2. `TabBar`（`tab_bar.rs`，32px）：左右切换箭头、文件标签页（Dirty 圆点与 `×` 关闭按钮）、新建 `+` 按钮。
-    3. `BreadcrumbBar`（`breadcrumb.rs`，28px）：相对工作区路径面包屑及右侧工具按钮（查找、行号开关、终端、设置）。
-    4. `EditorPane`（`flex_1`）：左侧 54px 行号栏（可选）+ 右侧 `CodeCanvas`（`code_canvas.rs`）精确排版画布（按 Tab 独立的 `scroll_top`/`scroll_left` 动态计算可见行，复用 `HighlightCache` 绘制高亮、选区/查找/竖线光标叠加、拖拽选区与 IME 候选窗定位）；右上角绝对定位叠加 `FindState`（`find_replace.rs`）查找替换浮层。
-    5. `TerminalResizer` 与 `TerminalDock`（`terminal_dock.rs`）：支持多终端 Tab、运行态指示、`AnsiLineCache` 着色、`Ctrl+Shift+C` 复制最近输出、鼠标左键滚动及 `Shift + 滚轮` 横向滚动。
-    6. `StatusBar`（`status_bar.rs`，26px）：底部状态栏。
-  - 最外层通过 `modal_overlay` / `confirm_overlay` 条件叠加异步扫描的 `FileFinder`（`file_finder.rs`）、`SettingsModal`（`settings_modal.rs`）或 `ConfirmModal`（`confirm_modal.rs`）。
+- **顶层视觉结构（Zed 原生工作区骨架）**：
+  - 根容器为纵向 `flex_col`，自上而下分为三段：
+    1. **顶部通栏 `TitleBar`**（`title_bar.rs`，34px）：左侧为侧边栏开关、项目选择器与 Git 分支胶囊；中间为拖拽区域与居中快速搜索胶囊（`Ctrl/Cmd+P`）；右侧为设置入口与 SVG 窗口控制按钮（macOS 保留左侧交通灯安全边距）。
+    2. **中间工作区（`flex_1` 水平 `flex_row`）**：
+       - 左侧为可折叠的 `SidebarView`（`EXPLORER` 表头、单箭头文件夹与语义色文件类型徽章、层级缩进引导线、当前激活文件高亮及垂直滚动条）与 2px 宽 `cursor_col_resize` 拖拽分隔条。
+       - 右侧主工作区纵向堆叠：
+         1. `TabBar`（`tab_bar.rs`，34px）：顶部 2px 强调条与底部无缝衔接的 Zed 风格标签页，支持中键关闭与溢出保护。
+         2. `BreadcrumbBar`（`breadcrumb.rs`，26px）：分层路径面包屑与文件内查找/行号开关。
+         3. `EditorPane`（`flex_1`）：动态位数宽度的行号栏（当前行联动高亮，可选）+ `CodeCanvas`（`code_canvas.rs`）+ 右侧极简可点击垂直滚动条；右上角绝对定位叠加 `FindState`（`find_replace.rs`）查找替换浮层。
+         4. `TerminalResizer` 与 `TerminalDock`（`terminal_dock.rs`）：支持多终端 Tab、运行态指示、`AnsiLineCache` 着色、垂直滚动条、`Ctrl+Shift+C` 复制最近输出及 `Shift + 滚轮` 横向滚动。
+    3. **底部通栏 `StatusBar`**（`status_bar.rs`，26px）：左侧为侧边栏/终端 Dock 开关、修改态提示与状态 Toast；右侧为行列号/选区字数、语言、缩进空格数、编码与行尾序列。
+  - 最外层通过 `modal_overlay` / `confirm_overlay` 条件叠加异步扫描的 `FileFinder`（`file_finder.rs`）、分组卡片布局与色块预览的 `SettingsModal`（`settings_modal.rs`）或 `ConfirmModal`（`confirm_modal.rs`）。
 - **原生窗口控制（`src/platform/window_controls.rs`）**：Windows 下通过 `raw-window-handle` 提取 `HWND`，调用 `user32` 的 `ShowWindowAsync`、`IsZoomed`、`ReleaseCapture`、`SendMessageW(..., WM_NCLBUTTONDOWN, HTCAPTION, ...)` 实现平滑无边框拖拽与最大化；非 Windows 平台回退至 GPUI 内置窗口方法。
 
 ### 4.4 键盘事件路由与 7 级焦点分层

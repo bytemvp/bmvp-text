@@ -3,7 +3,7 @@
 set -euo pipefail
 
 TARGET="${1:-aarch64-apple-darwin}"
-VERSION="${2:-0.2.0}"
+VERSION="${2:-0.3.0}"
 ARTIFACT_NAME="${3:-bmvp-text-${TARGET}}"
 SKIP_BUILD="${SKIP_BUILD:-0}"
 APP_NAME="bmvp-text"

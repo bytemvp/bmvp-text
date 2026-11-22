@@ -11,6 +11,7 @@ use crate::ui::code_canvas::{CodeCanvas, CodeLayoutState};
 use crate::ui::confirm_modal::{ConfirmModal, PendingClose};
 use crate::ui::file_finder::{FileFinder, FileFinderCallbacks};
 use crate::ui::find_replace::{FindReplaceCallbacks, FindState};
+use crate::ui::scrollbar;
 use crate::ui::settings_modal::{FontDropdownTarget, SettingsModal, SettingsModalCallbacks};
 use crate::ui::sidebar_view::{SidebarCallbacks, SidebarView};
 use crate::ui::status_bar::{StatusBar, StatusBarCallbacks};
@@ -251,6 +252,11 @@ fn main() {{
                         .justify_end()
                         .pr_3()
                         .text_color(gutter_col)
+                        .font_weight(if is_cursor_line {
+                            FontWeight::MEDIUM
+                        } else {
+                            FontWeight::NORMAL
+                        })
                         .cursor_pointer()
                         .on_mouse_down(
                             MouseButton::Left,
@@ -273,12 +279,15 @@ fn main() {{
             }
         }
 
+        let gutter_width = compute_gutter_width(total_lines, self.settings.font_size);
         let gutter_div = if show_line_numbers {
             Some(
                 div()
-                    .w(px(54.0))
+                    .w(px(gutter_width))
                     .h_full()
                     .bg(theme.bg_gutter)
+                    .border_r_1()
+                    .border_color(theme.border_subtle)
                     .py_1()
                     .font_family(font_family)
                     .children(gutter_elements)
@@ -287,6 +296,44 @@ fn main() {{
         } else {
             None
         };
+
+        let editor_track_h = self
+            .code_layout
+            .text_bounds
+            .map(|b| f32::from(b.size.height))
+            .unwrap_or_else(|| {
+                let win_h = f32::from(window.viewport_size().height);
+                let term_h = if self.show_terminal && !self.terminals.is_empty() {
+                    self.terminal_height + 2.0
+                } else {
+                    0.0
+                };
+                (win_h - 120.0 - term_h).max(40.0)
+            });
+
+        let on_scrollbar_click: crate::ui::UiMouseAction =
+            Rc::new(cx.listener(move |this, event: &MouseDownEvent, _win, cx| {
+                if let Some(bounds) = this.code_layout.text_bounds {
+                    let track_h = f32::from(bounds.size.height).max(1.0);
+                    let ratio = ((f32::from(event.position.y) - f32::from(bounds.top())) / track_h)
+                        .clamp(0.0, 1.0);
+                    let max_scroll = total_lines.saturating_sub(visible_line_count);
+                    let target = (ratio * max_scroll as f32).round() as usize;
+                    if let Some(buf) = this.current_buffer_mut() {
+                        buf.set_scroll_top(target);
+                    }
+                    cx.notify();
+                }
+            }));
+
+        let editor_scrollbar = scrollbar::render_vertical_scrollbar(
+            total_lines,
+            visible_line_count,
+            start_line,
+            editor_track_h,
+            theme,
+            Some(on_scrollbar_click),
+        );
 
         let find_overlay = if self.find_state.is_open {
             Some(
@@ -414,6 +461,7 @@ fn main() {{
                         editor: cx.entity(),
                     }),
             )
+            .children(editor_scrollbar)
             .children(find_overlay)
             .into_any_element()
     }
@@ -432,26 +480,16 @@ impl Render for EditorView {
 
         let theme = &self.theme;
 
+        let active_file_path = self.current_buffer().and_then(|b| b.file_path());
         let sidebar_element = if self.show_sidebar {
             Some(SidebarView::render(
                 &self.sidebar,
-                &project_name,
+                active_file_path,
                 self.sidebar_width,
                 &self.settings.font_family,
                 window.viewport_size().height,
                 theme,
                 SidebarCallbacks {
-                    on_header_mouse_down: Rc::new(cx.listener(
-                        |this, event: &MouseDownEvent, win, cx| {
-                            if event.click_count >= 2 {
-                                this.pending_window_drag = None;
-                                window_controls::toggle_maximize(win);
-                                cx.notify();
-                            } else {
-                                this.pending_window_drag = Some(event.position);
-                            }
-                        },
-                    )),
                     on_new_tab: Self::cb0(cx, |this, _win, cx| {
                         this.new_tab(cx);
                     }),
@@ -478,13 +516,6 @@ impl Render for EditorView {
                             this.sidebar.scroll_up(delta_y as usize);
                         }
                         cx.notify();
-                    }),
-                    on_hide_sidebar: Self::cb0(cx, |this, _win, cx| {
-                        this.show_sidebar = false;
-                        cx.notify();
-                    }),
-                    on_open_settings: Self::cb0(cx, |this, _win, cx| {
-                        this.toggle_settings_modal(cx);
                     }),
                 },
             ))
@@ -524,11 +555,11 @@ impl Render for EditorView {
             None
         };
 
-        let right_title_bar = TitleBar::render(
+        let top_title_bar = TitleBar::render(
             &project_name,
+            self.git_branch.as_deref(),
             is_maximized,
             self.show_sidebar,
-            self.show_terminal,
             self.show_settings,
             theme,
             TitleBarCallbacks {
@@ -552,9 +583,6 @@ impl Render for EditorView {
                 )),
                 on_open_finder: Rc::new(cx.listener(|this, _, _win, cx| {
                     this.open_file_finder(cx);
-                })),
-                on_toggle_terminal: Rc::new(cx.listener(|this, _, _win, cx| {
-                    this.toggle_terminal(cx);
                 })),
                 on_toggle_settings: Rc::new(cx.listener(|this, _, _win, cx| {
                     this.toggle_settings_modal(cx);
@@ -617,7 +645,6 @@ impl Render for EditorView {
             path_display,
             self.find_state.is_open,
             self.settings.show_line_numbers,
-            self.show_terminal,
             theme,
             BreadcrumbCallbacks {
                 on_open_find: Self::cb0(cx, |this, _win, cx| {
@@ -627,12 +654,6 @@ impl Render for EditorView {
                     this.settings.show_line_numbers = !this.settings.show_line_numbers;
                     this.save_config();
                     cx.notify();
-                }),
-                on_toggle_terminal: Self::cb0(cx, |this, _win, cx| {
-                    this.toggle_terminal(cx);
-                }),
-                on_toggle_settings: Self::cb0(cx, |this, _win, cx| {
-                    this.toggle_settings_modal(cx);
                 }),
             },
         );
@@ -759,16 +780,16 @@ impl Render for EditorView {
             &self.settings,
             self.show_sidebar,
             self.show_terminal,
-            self.git_branch.as_deref(),
             self.status_message
                 .as_ref()
                 .map(|(msg, is_err)| (msg.as_str(), *is_err)),
             StatusBarCallbacks {
+                on_toggle_sidebar: Self::cb0(cx, |this, _win, cx| {
+                    this.show_sidebar = !this.show_sidebar;
+                    cx.notify();
+                }),
                 on_toggle_terminal: Self::cb0(cx, |this, _win, cx| {
                     this.toggle_terminal(cx);
-                }),
-                on_open_find: Self::cb0(cx, |this, _win, cx| {
-                    this.open_find_bar(cx);
                 }),
                 on_clear_status_message: Self::cb0(cx, |this, _win, cx| {
                     this.clear_status_message();
@@ -782,9 +803,6 @@ impl Render for EditorView {
                     };
                     this.save_config();
                     cx.notify();
-                }),
-                on_toggle_settings: Self::cb0(cx, |this, _win, cx| {
-                    this.toggle_settings_modal(cx);
                 }),
             },
         )
@@ -953,7 +971,7 @@ impl Render for EditorView {
             .font_family(".SystemUIFont")
             .text_size(px(self.settings.font_size))
             .flex()
-            .flex_row();
+            .flex_col();
 
         if self.resizing_sidebar {
             root = root.cursor_col_resize();
@@ -961,24 +979,59 @@ impl Render for EditorView {
             root = root.cursor_row_resize();
         }
 
-        root.children(sidebar_element)
-            .children(sidebar_resizer)
+        root.child(top_title_bar)
             .child(
                 div()
                     .flex_1()
-                    .h_full()
+                    .min_h_0()
+                    .w_full()
                     .flex()
-                    .flex_col()
+                    .flex_row()
                     .overflow_hidden()
-                    .child(right_title_bar)
-                    .child(tab_bar)
-                    .child(breadcrumb_bar)
-                    .child(editor_pane)
-                    .children(terminal_resizer)
-                    .children(bottom_terminal)
-                    .child(status_bar),
+                    .children(sidebar_element)
+                    .children(sidebar_resizer)
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .h_full()
+                            .flex()
+                            .flex_col()
+                            .overflow_hidden()
+                            .child(tab_bar)
+                            .child(breadcrumb_bar)
+                            .child(editor_pane)
+                            .children(terminal_resizer)
+                            .children(bottom_terminal),
+                    ),
             )
+            .child(status_bar)
             .children(modal_overlay)
             .children(confirm_overlay)
+    }
+}
+
+pub fn compute_gutter_width(total_lines: usize, font_size: f32) -> f32 {
+    let digits = total_lines.max(1).to_string().len().max(3);
+    ((digits as f32) * (font_size * 0.62) + 24.0)
+        .ceil()
+        .max(48.0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::compute_gutter_width;
+
+    #[test]
+    fn test_compute_gutter_width_scales_with_digits() {
+        let small = compute_gutter_width(1, 14.0);
+        let medium = compute_gutter_width(999, 14.0);
+        let large = compute_gutter_width(10_000, 14.0);
+        let huge = compute_gutter_width(1_000_000, 14.0);
+
+        assert_eq!(small, medium);
+        assert!(small >= 48.0);
+        assert!(large > medium);
+        assert!(huge > large);
     }
 }

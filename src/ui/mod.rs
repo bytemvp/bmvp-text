@@ -6,6 +6,8 @@ mod editor_input;
 pub mod editor_view;
 pub mod file_finder;
 pub mod find_replace;
+pub mod icons;
+pub mod scrollbar;
 pub mod settings_modal;
 pub mod sidebar_view;
 pub mod status_bar;

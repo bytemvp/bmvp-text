@@ -1,3 +1,4 @@
+use crate::ui::icons::{self, IconName};
 use crate::ui::theme::Theme;
 use crate::ui::{UiAction, UiAction1};
 use gpui::*;
@@ -34,64 +35,72 @@ impl TabBar {
         let on_next = callbacks.on_next_tab;
         let on_new = callbacks.on_new_tab;
 
-        let mut tab_row_items: Vec<AnyElement> = Vec::new();
+        let nav_arrows = if tab_count > 1 {
+            Some(
+                div()
+                    .h_full()
+                    .px_1p5()
+                    .border_b_1()
+                    .border_r_1()
+                    .border_color(theme.border_subtle)
+                    .flex()
+                    .items_center()
+                    .gap_0p5()
+                    .child(
+                        div()
+                            .w(px(20.0))
+                            .h(px(20.0))
+                            .rounded_xs()
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .cursor_pointer()
+                            .hover(|s| s.bg(theme.bg_hover))
+                            .child(icons::render_icon(
+                                IconName::ChevronLeft,
+                                px(12.0),
+                                if can_prev {
+                                    theme.text_secondary
+                                } else {
+                                    theme.text_muted
+                                },
+                            ))
+                            .on_mouse_down(MouseButton::Left, move |_, win, cx| {
+                                cx.stop_propagation();
+                                on_prev(win, cx);
+                            }),
+                    )
+                    .child(
+                        div()
+                            .w(px(20.0))
+                            .h(px(20.0))
+                            .rounded_xs()
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .cursor_pointer()
+                            .hover(|s| s.bg(theme.bg_hover))
+                            .child(icons::render_icon(
+                                IconName::ChevronRight,
+                                px(12.0),
+                                if can_next {
+                                    theme.text_secondary
+                                } else {
+                                    theme.text_muted
+                                },
+                            ))
+                            .on_mouse_down(MouseButton::Left, move |_, win, cx| {
+                                cx.stop_propagation();
+                                on_next(win, cx);
+                            }),
+                    )
+                    .into_any_element(),
+            )
+        } else {
+            None
+        };
 
-        tab_row_items.push(
-            div()
-                .h_full()
-                .px_2()
-                .border_b_1()
-                .border_color(theme.border_subtle)
-                .flex()
-                .items_center()
-                .gap_1()
-                .child(
-                    div()
-                        .w(px(20.0))
-                        .h(px(20.0))
-                        .rounded_xs()
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .cursor_pointer()
-                        .text_xs()
-                        .text_color(if can_prev {
-                            theme.text_secondary
-                        } else {
-                            theme.text_muted
-                        })
-                        .hover(|s| s.bg(theme.bg_hover).text_color(theme.text_primary))
-                        .child("←")
-                        .on_mouse_down(MouseButton::Left, move |_, win, cx| {
-                            cx.stop_propagation();
-                            on_prev(win, cx);
-                        }),
-                )
-                .child(
-                    div()
-                        .w(px(20.0))
-                        .h(px(20.0))
-                        .rounded_xs()
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .cursor_pointer()
-                        .text_xs()
-                        .text_color(if can_next {
-                            theme.text_secondary
-                        } else {
-                            theme.text_muted
-                        })
-                        .hover(|s| s.bg(theme.bg_hover).text_color(theme.text_primary))
-                        .child("→")
-                        .on_mouse_down(MouseButton::Left, move |_, win, cx| {
-                            cx.stop_propagation();
-                            on_next(win, cx);
-                        }),
-                )
-                .into_any_element(),
-        );
-
+        let mut tab_items: Vec<AnyElement> = Vec::with_capacity(tab_count);
         for (idx, tab) in tabs.iter().enumerate() {
             let is_active = tab.is_active;
             let tab_bg = if is_active {
@@ -105,15 +114,19 @@ impl TabBar {
                 theme.text_secondary
             };
 
+            let (badge_label, badge_color) = icons::file_badge_style(&tab.title, theme);
             let on_select = Rc::clone(&callbacks.on_select_tab);
-            let on_close = Rc::clone(&callbacks.on_close_tab);
+            let on_close_left = Rc::clone(&callbacks.on_close_tab);
+            let on_close_mid = Rc::clone(&callbacks.on_close_tab);
 
             let mut tab_btn = div()
+                .relative()
                 .h_full()
                 .px_3()
                 .flex()
                 .items_center()
-                .gap_2()
+                .gap_1p5()
+                .flex_shrink_0()
                 .bg(tab_bg)
                 .text_color(tab_fg)
                 .text_xs()
@@ -129,18 +142,31 @@ impl TabBar {
                     } else {
                         theme.bg_hover
                     })
+                    .text_color(theme.text_primary)
                 })
                 .on_mouse_down(MouseButton::Left, move |_, win, cx| {
                     cx.stop_propagation();
                     on_select(idx, win, cx);
+                })
+                .on_mouse_down(MouseButton::Middle, move |_, win, cx| {
+                    cx.stop_propagation();
+                    on_close_mid(idx, win, cx);
                 });
 
             if is_active {
-                tab_btn = tab_btn
-                    .border_t_2()
-                    .border_l_1()
-                    .border_r_1()
-                    .border_color(theme.accent);
+                tab_btn = tab_btn.border_r_1().border_color(theme.border_subtle);
+                if idx > 0 {
+                    tab_btn = tab_btn.border_l_1();
+                }
+                tab_btn = tab_btn.child(
+                    div()
+                        .absolute()
+                        .top_0()
+                        .left_0()
+                        .right_0()
+                        .h(px(2.0))
+                        .bg(theme.accent),
+                );
             } else {
                 tab_btn = tab_btn
                     .border_b_1()
@@ -148,13 +174,27 @@ impl TabBar {
                     .border_color(theme.border_subtle);
             }
 
-            tab_btn = tab_btn.child(tab.title.clone());
+            tab_btn = tab_btn
+                .child(
+                    div()
+                        .text_size(px(10.0))
+                        .font_weight(FontWeight::MEDIUM)
+                        .text_color(badge_color)
+                        .child(badge_label),
+                )
+                .child(
+                    div()
+                        .max_w(px(160.0))
+                        .overflow_hidden()
+                        .whitespace_nowrap()
+                        .child(tab.title.clone()),
+                );
 
             if tab.is_dirty {
                 tab_btn = tab_btn.child(
                     div()
-                        .w_1p5()
-                        .h_1p5()
+                        .w(px(6.0))
+                        .h(px(6.0))
                         .rounded_full()
                         .bg(theme.dirty_indicator),
                 );
@@ -162,61 +202,69 @@ impl TabBar {
 
             tab_btn = tab_btn.child(
                 div()
-                    .w_4()
-                    .h_4()
+                    .w(px(16.0))
+                    .h(px(16.0))
                     .flex()
                     .items_center()
                     .justify_center()
                     .rounded_xs()
-                    .text_color(theme.text_muted)
-                    .hover(|s| s.bg(theme.bg_hover).text_color(theme.error))
-                    .child("×")
+                    .hover(|s| s.bg(theme.bg_hover))
+                    .child(
+                        icons::render_icon(IconName::Close, px(11.0), theme.text_muted)
+                            .hover(|s| s.text_color(theme.error)),
+                    )
                     .on_mouse_down(MouseButton::Left, move |_, win, cx| {
                         cx.stop_propagation();
-                        on_close(idx, win, cx);
+                        on_close_left(idx, win, cx);
                     }),
             );
 
-            tab_row_items.push(tab_btn.into_any_element());
+            tab_items.push(tab_btn.into_any_element());
         }
 
-        tab_row_items.push(
-            div()
-                .h_full()
-                .px_2p5()
-                .border_b_1()
-                .border_color(theme.border_subtle)
-                .flex()
-                .items_center()
-                .justify_center()
-                .cursor_pointer()
-                .text_xs()
-                .text_color(theme.text_muted)
-                .hover(|s| s.bg(theme.bg_hover).text_color(theme.text_primary))
-                .child("+")
-                .on_mouse_down(MouseButton::Left, move |_, win, cx| {
-                    cx.stop_propagation();
-                    on_new(win, cx);
-                })
-                .into_any_element(),
-        );
-
-        tab_row_items.push(
-            div()
-                .flex_1()
-                .h_full()
-                .border_b_1()
-                .border_color(theme.border_subtle)
-                .into_any_element(),
-        );
-
         div()
-            .h(px(32.0))
+            .h(px(34.0))
             .w_full()
             .bg(theme.bg_tab_bar)
             .flex()
             .items_center()
-            .children(tab_row_items)
+            .overflow_hidden()
+            .children(nav_arrows)
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .h_full()
+                    .overflow_hidden()
+                    .children(tab_items),
+            )
+            .child(
+                div()
+                    .h_full()
+                    .px_2p5()
+                    .border_b_1()
+                    .border_color(theme.border_subtle)
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .cursor_pointer()
+                    .hover(|s| s.bg(theme.bg_hover))
+                    .child(
+                        icons::render_icon(IconName::Plus, px(13.0), theme.text_muted)
+                            .hover(|s| s.text_color(theme.text_primary)),
+                    )
+                    .on_mouse_down(MouseButton::Left, move |_, win, cx| {
+                        cx.stop_propagation();
+                        on_new(win, cx);
+                    }),
+            )
+            .child(
+                div()
+                    .flex_1()
+                    .h_full()
+                    .border_b_1()
+                    .border_color(theme.border_subtle),
+            )
             .into_any_element()
     }
 }

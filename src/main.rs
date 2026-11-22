@@ -4,7 +4,7 @@ use gpui::*;
 
 fn main() {
     let startup = parse_startup_args(std::env::args_os());
-    let app = Application::new();
+    let app = Application::new().with_assets(bmvp_text::ui::icons::EmbeddedAssets);
 
     app.run(move |cx| {
         let startup = startup.clone();

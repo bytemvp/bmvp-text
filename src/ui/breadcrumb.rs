@@ -1,4 +1,5 @@
 use crate::ui::UiAction;
+use crate::ui::icons::{self, IconName};
 use crate::ui::theme::Theme;
 use gpui::*;
 use std::path::Path;
@@ -6,8 +7,6 @@ use std::path::Path;
 pub struct BreadcrumbCallbacks {
     pub on_open_find: UiAction,
     pub on_toggle_line_numbers: UiAction,
-    pub on_toggle_terminal: UiAction,
-    pub on_toggle_settings: UiAction,
 }
 
 pub struct BreadcrumbBar;
@@ -38,17 +37,46 @@ impl BreadcrumbBar {
         path_display: String,
         find_is_open: bool,
         show_line_numbers: bool,
-        show_terminal: bool,
         theme: &Theme,
         callbacks: BreadcrumbCallbacks,
     ) -> AnyElement {
         let on_find = callbacks.on_open_find;
         let on_line_nums = callbacks.on_toggle_line_numbers;
-        let on_terminal = callbacks.on_toggle_terminal;
-        let on_settings = callbacks.on_toggle_settings;
+
+        let segments: Vec<&str> = path_display
+            .split(" › ")
+            .filter(|s| !s.is_empty())
+            .collect();
+        let seg_count = segments.len();
+        let mut crumb_items: Vec<AnyElement> = Vec::new();
+        for (idx, seg) in segments.into_iter().enumerate() {
+            if idx > 0 {
+                crumb_items.push(
+                    icons::render_icon(IconName::ChevronRight, px(10.0), theme.text_muted)
+                        .into_any_element(),
+                );
+            }
+            let is_last = idx + 1 == seg_count;
+            crumb_items.push(
+                div()
+                    .text_size(px(11.5))
+                    .text_color(if is_last {
+                        theme.text_primary
+                    } else {
+                        theme.text_muted
+                    })
+                    .font_weight(if is_last {
+                        FontWeight::MEDIUM
+                    } else {
+                        FontWeight::NORMAL
+                    })
+                    .child(seg.to_string())
+                    .into_any_element(),
+            );
+        }
 
         div()
-            .h(px(28.0))
+            .h(px(26.0))
             .w_full()
             .bg(theme.bg_editor)
             .border_b_1()
@@ -59,12 +87,13 @@ impl BreadcrumbBar {
             .px_3()
             .child(
                 div()
+                    .flex_1()
+                    .min_w_0()
+                    .overflow_hidden()
                     .flex()
                     .items_center()
-                    .gap_1p5()
-                    .text_xs()
-                    .text_color(theme.text_secondary)
-                    .child(path_display),
+                    .gap_1()
+                    .children(crumb_items),
             )
             .child(
                 div()
@@ -80,14 +109,21 @@ impl BreadcrumbBar {
                             .items_center()
                             .justify_center()
                             .cursor_pointer()
-                            .hover(|s| s.bg(theme.bg_hover).text_color(theme.text_primary))
-                            .text_color(if find_is_open {
-                                theme.accent
+                            .bg(if find_is_open {
+                                theme.bg_hover
                             } else {
-                                theme.text_secondary
+                                theme.bg_editor
                             })
-                            .text_xs()
-                            .child("⌕")
+                            .hover(|s| s.bg(theme.bg_hover))
+                            .child(icons::render_icon(
+                                IconName::Search,
+                                px(12.0),
+                                if find_is_open {
+                                    theme.accent
+                                } else {
+                                    theme.text_secondary
+                                },
+                            ))
                             .on_mouse_down(MouseButton::Left, move |_, win, cx| {
                                 cx.stop_propagation();
                                 on_find(win, cx);
@@ -102,57 +138,24 @@ impl BreadcrumbBar {
                             .items_center()
                             .justify_center()
                             .cursor_pointer()
-                            .hover(|s| s.bg(theme.bg_hover).text_color(theme.text_primary))
-                            .text_color(if show_line_numbers {
-                                theme.text_primary
+                            .bg(if show_line_numbers {
+                                theme.bg_hover
                             } else {
-                                theme.text_muted
+                                theme.bg_editor
                             })
-                            .text_xs()
-                            .child("#")
+                            .hover(|s| s.bg(theme.bg_hover))
+                            .child(icons::render_icon(
+                                IconName::Hash,
+                                px(12.0),
+                                if show_line_numbers {
+                                    theme.text_primary
+                                } else {
+                                    theme.text_muted
+                                },
+                            ))
                             .on_mouse_down(MouseButton::Left, move |_, win, cx| {
                                 cx.stop_propagation();
                                 on_line_nums(win, cx);
-                            }),
-                    )
-                    .child(
-                        div()
-                            .w(px(22.0))
-                            .h(px(20.0))
-                            .rounded_xs()
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .cursor_pointer()
-                            .hover(|s| s.bg(theme.bg_hover).text_color(theme.text_primary))
-                            .text_color(if show_terminal {
-                                theme.accent
-                            } else {
-                                theme.text_secondary
-                            })
-                            .text_xs()
-                            .child(">_")
-                            .on_mouse_down(MouseButton::Left, move |_, win, cx| {
-                                cx.stop_propagation();
-                                on_terminal(win, cx);
-                            }),
-                    )
-                    .child(
-                        div()
-                            .w(px(22.0))
-                            .h(px(20.0))
-                            .rounded_xs()
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .cursor_pointer()
-                            .hover(|s| s.bg(theme.bg_hover).text_color(theme.text_primary))
-                            .text_color(theme.text_secondary)
-                            .text_xs()
-                            .child("⚙")
-                            .on_mouse_down(MouseButton::Left, move |_, win, cx| {
-                                cx.stop_propagation();
-                                on_settings(win, cx);
                             }),
                     ),
             )

@@ -1,6 +1,6 @@
 [package]
 name = "bmvp-text"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2024"
 authors = ["ByteMVP Team <dev@bytemvp.com>"]
 description = "A lightweight, high-performance code editor inspired by Zed, built with pure Rust and GPUI."

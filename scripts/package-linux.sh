@@ -3,7 +3,7 @@
 set -euo pipefail
 
 TARGET="${1:-x86_64-unknown-linux-gnu}"
-VERSION="${2:-0.2.0}"
+VERSION="${2:-0.3.0}"
 ARTIFACT_NAME="${3:-bmvp-text-linux-x64}"
 SKIP_BUILD="${SKIP_BUILD:-0}"
 APP_NAME="bmvp-text"

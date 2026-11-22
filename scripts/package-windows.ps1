@@ -1,7 +1,7 @@
 # PowerShell build and package script for Windows
 param (
     [string]$Target = "x86_64-pc-windows-msvc",
-    [string]$Version = "0.2.0",
+    [string]$Version = "0.3.0",
     [string]$ArtifactName = "bmvp-text-windows-x64",
     [switch]$SkipBuild = $false,
     [switch]$BuildInstaller = $false

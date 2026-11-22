@@ -1,3 +1,4 @@
+use crate::ui::icons::{self, IconName};
 use crate::ui::theme::Theme;
 use gpui::*;
 use std::rc::Rc;
@@ -56,19 +57,13 @@ impl ConfirmModal {
             }
         };
 
-        let backdrop_bg = if theme.is_light() {
-            hsla(0.0, 0.0, 0.0, 0.30)
-        } else {
-            hsla(0.0, 0.0, 0.0, 0.65)
-        };
-
         div()
             .absolute()
             .inset_0()
             .flex()
             .items_center()
             .justify_center()
-            .bg(backdrop_bg)
+            .bg(theme.backdrop)
             .occlude()
             .on_mouse_down(MouseButton::Left, move |ev, win, cx| {
                 cx.stop_propagation();
@@ -77,7 +72,7 @@ impl ConfirmModal {
             .child(
                 div()
                     .w(px(440.0))
-                    .rounded_md()
+                    .rounded_lg()
                     .bg(theme.bg_modal)
                     .border_1()
                     .border_color(theme.border)
@@ -88,26 +83,24 @@ impl ConfirmModal {
                     })
                     .child(
                         div()
-                            .h(px(38.0))
+                            .h(px(40.0))
                             .px_4()
                             .bg(theme.bg_surface)
-                            .rounded_t_md()
+                            .rounded_t_lg()
                             .border_b_1()
                             .border_color(theme.border_subtle)
                             .flex()
                             .items_center()
                             .gap_2()
-                            .child(
-                                div()
-                                    .w(px(8.0))
-                                    .h(px(8.0))
-                                    .rounded_full()
-                                    .bg(theme.dirty_indicator),
-                            )
+                            .child(icons::render_icon(
+                                IconName::AlertCircle,
+                                px(15.0),
+                                theme.dirty_indicator,
+                            ))
                             .child(
                                 div()
                                     .text_xs()
-                                    .font_weight(FontWeight::BOLD)
+                                    .font_weight(FontWeight::SEMIBOLD)
                                     .text_color(theme.text_primary)
                                     .child(title),
                             ),

@@ -1,4 +1,5 @@
 use crate::core::sidebar::Sidebar;
+use crate::ui::icons::{self, IconName};
 use crate::ui::theme::Theme;
 use crate::ui::{UiAction, UiAction1};
 use gpui::*;
@@ -261,67 +262,95 @@ impl FileFinder {
                 .file_name()
                 .map(|s| s.to_string_lossy().to_string())
                 .unwrap_or_else(|| rel.clone());
-            let icon = Sidebar::file_icon(false, false, &file_name);
+            let (badge_label, badge_color) = icons::file_badge_style(&file_name, theme);
 
             let bg = if is_selected {
-                theme.bg_hover
+                theme.bg_selected
             } else {
                 theme.bg_modal
             };
             let path_clone = path.clone();
             let on_select = Rc::clone(&callbacks.on_select_file);
 
-            list_elements.push(
-                div()
-                    .h_7()
-                    .px_2p5()
-                    .mx_1()
-                    .rounded_sm()
-                    .flex()
-                    .items_center()
-                    .justify_between()
-                    .cursor_pointer()
-                    .bg(bg)
-                    .hover(|s| s.bg(theme.bg_hover))
-                    .on_mouse_down(MouseButton::Left, move |_, win, cx| {
-                        cx.stop_propagation();
-                        on_select(path_clone.clone(), win, cx);
+            let mut row = div()
+                .relative()
+                .h(px(30.0))
+                .px_3()
+                .mx_1()
+                .rounded_sm()
+                .flex()
+                .items_center()
+                .justify_between()
+                .gap_3()
+                .cursor_pointer()
+                .bg(bg)
+                .hover(|s| {
+                    s.bg(if is_selected {
+                        theme.bg_selected
+                    } else {
+                        theme.bg_hover
                     })
-                    .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .gap_2()
-                            .child(
-                                div()
-                                    .w(px(20.0))
-                                    .text_xs()
-                                    .text_color(theme.text_muted)
-                                    .font_family(icon_font.clone())
-                                    .child(icon),
-                            )
-                            .child(
-                                div()
-                                    .text_xs()
-                                    .font_weight(if is_selected {
-                                        FontWeight::BOLD
-                                    } else {
-                                        FontWeight::NORMAL
-                                    })
-                                    .text_color(if is_selected {
-                                        theme.accent
-                                    } else {
-                                        theme.text_primary
-                                    })
-                                    .child(file_name),
-                            ),
-                    )
-                    .child(
-                        div()
-                            .text_xs()
-                            .text_color(theme.text_muted)
-                            .child(rel.clone()),
-                    ),
+                })
+                .on_mouse_down(MouseButton::Left, move |_, win, cx| {
+                    cx.stop_propagation();
+                    on_select(path_clone.clone(), win, cx);
+                });
+
+            if is_selected {
+                row = row.child(
+                    div()
+                        .absolute()
+                        .left_0()
+                        .top(px(5.0))
+                        .bottom(px(5.0))
+                        .w(px(2.0))
+                        .rounded_r_xs()
+                        .bg(theme.accent),
+                );
+            }
+
+            list_elements.push(
+                row.child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap_2()
+                        .child(
+                            div()
+                                .w(px(26.0))
+                                .flex_shrink_0()
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .text_size(px(10.5))
+                                .font_weight(FontWeight::MEDIUM)
+                                .text_color(badge_color)
+                                .font_family(icon_font.clone())
+                                .child(badge_label),
+                        )
+                        .child(
+                            div()
+                                .text_xs()
+                                .font_weight(if is_selected {
+                                    FontWeight::MEDIUM
+                                } else {
+                                    FontWeight::NORMAL
+                                })
+                                .text_color(theme.text_primary)
+                                .child(file_name),
+                        ),
+                )
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .overflow_hidden()
+                        .whitespace_nowrap()
+                        .text_right()
+                        .text_size(px(11.0))
+                        .text_color(theme.text_muted)
+                        .child(rel.clone()),
+                ),
             );
         }
 
@@ -354,11 +383,11 @@ impl FileFinder {
         div()
             .absolute()
             .inset_0()
-            .bg(rgba(0x000000aa))
+            .bg(theme.backdrop)
             .flex()
             .items_start()
             .justify_center()
-            .pt(px(60.0))
+            .pt(px(64.0))
             .occlude()
             .on_mouse_down(MouseButton::Left, move |_, win, cx| {
                 cx.stop_propagation();
@@ -366,8 +395,8 @@ impl FileFinder {
             })
             .child(
                 div()
-                    .w(px(580.0))
-                    .max_h(px(460.0))
+                    .w(px(600.0))
+                    .max_h(px(470.0))
                     .bg(theme.bg_modal)
                     .border_1()
                     .border_color(theme.border)
@@ -382,14 +411,14 @@ impl FileFinder {
                     })
                     .child(
                         div()
-                            .h(px(42.0))
-                            .px_3()
+                            .h(px(44.0))
+                            .px_3p5()
                             .border_b_1()
                             .border_color(theme.border_subtle)
                             .flex()
                             .items_center()
-                            .gap_2()
-                            .child(div().text_color(theme.accent).text_sm().child("⌕"))
+                            .gap_2p5()
+                            .child(icons::render_icon(IconName::Search, px(15.0), theme.accent))
                             .child(
                                 div()
                                     .flex_1()
@@ -410,8 +439,10 @@ impl FileFinder {
                                     .px_2()
                                     .py_0p5()
                                     .rounded_xs()
-                                    .bg(theme.bg_hover)
-                                    .text_xs()
+                                    .bg(theme.bg_elevated)
+                                    .border_1()
+                                    .border_color(theme.border_subtle)
+                                    .text_size(px(11.0))
                                     .text_color(theme.text_muted)
                                     .child(result_badge),
                             ),

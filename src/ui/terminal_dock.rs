@@ -1,6 +1,8 @@
 use crate::config::settings::EditorSettings;
 use crate::terminal::ansi::parse_ansi_spans;
 use crate::terminal::session::SystemTerminal;
+use crate::ui::icons::{self, IconName};
+use crate::ui::scrollbar;
 use crate::ui::theme::Theme;
 use crate::ui::{UiAction, UiAction1, UiAction2};
 use gpui::*;
@@ -85,7 +87,7 @@ impl TerminalDock {
             0
         };
 
-        let avail_h = (terminal_height - 28.0 - 20.0).max(line_h);
+        let avail_h = (terminal_height - 30.0 - 20.0).max(line_h);
         let max_rows = (avail_h / line_h).floor().max(1.0) as usize;
         let visible_count = max_rows.saturating_sub(input_rows);
 
@@ -205,11 +207,10 @@ impl TerminalDock {
         let mut tab_divs: Vec<AnyElement> = Vec::new();
         for (idx, t) in terminals.iter().enumerate() {
             let is_cur = idx == active_idx;
-            let status_icon = if t.is_running { "● " } else { ">_ " };
             let status_color = if t.is_running {
                 theme.dirty_indicator
             } else if is_cur {
-                theme.text_primary
+                theme.accent
             } else {
                 theme.text_muted
             };
@@ -218,6 +219,7 @@ impl TerminalDock {
             let on_close = Rc::clone(&callbacks.on_close_tab);
 
             let mut term_tab = div()
+                .relative()
                 .h_full()
                 .px_3()
                 .flex()
@@ -235,8 +237,14 @@ impl TerminalDock {
                     } else {
                         theme.bg_hover
                     })
+                    .text_color(theme.text_primary)
                 })
                 .text_xs()
+                .font_weight(if is_cur {
+                    FontWeight::MEDIUM
+                } else {
+                    FontWeight::NORMAL
+                })
                 .text_color(if is_cur {
                     theme.text_primary
                 } else {
@@ -246,7 +254,12 @@ impl TerminalDock {
                     div()
                         .flex()
                         .items_center()
-                        .child(div().text_color(status_color).child(status_icon))
+                        .gap_1p5()
+                        .child(icons::render_icon(
+                            IconName::Terminal,
+                            px(12.0),
+                            status_color,
+                        ))
                         .child(t.title.clone()),
                 )
                 .child(
@@ -257,9 +270,11 @@ impl TerminalDock {
                         .flex()
                         .items_center()
                         .justify_center()
-                        .text_color(theme.text_muted)
-                        .hover(|s| s.bg(theme.bg_hover).text_color(theme.error))
-                        .child("×")
+                        .hover(|s| s.bg(theme.bg_hover))
+                        .child(
+                            icons::render_icon(IconName::Close, px(10.0), theme.text_muted)
+                                .hover(|s| s.text_color(theme.error)),
+                        )
                         .on_mouse_down(MouseButton::Left, move |_, win, cx| {
                             cx.stop_propagation();
                             on_close(idx, win, cx);
@@ -272,10 +287,20 @@ impl TerminalDock {
 
             if is_cur {
                 term_tab = term_tab
-                    .border_t_1()
-                    .border_l_1()
                     .border_r_1()
-                    .border_color(theme.border_subtle);
+                    .border_color(theme.border_subtle)
+                    .child(
+                        div()
+                            .absolute()
+                            .top_0()
+                            .left_0()
+                            .right_0()
+                            .h(px(2.0))
+                            .bg(theme.accent),
+                    );
+                if idx > 0 {
+                    term_tab = term_tab.border_l_1();
+                }
             } else {
                 term_tab = term_tab
                     .border_b_1()
@@ -303,7 +328,7 @@ impl TerminalDock {
         let on_scroll_wheel = callbacks.on_scroll_wheel;
 
         let header = div()
-            .h(px(28.0))
+            .h(px(30.0))
             .w_full()
             .bg(theme.bg_tab_bar)
             .flex()
@@ -319,10 +344,12 @@ impl TerminalDock {
                     .items_center()
                     .justify_center()
                     .cursor_pointer()
-                    .text_xs()
-                    .text_color(theme.text_secondary)
-                    .hover(|s| s.bg(theme.bg_hover).text_color(theme.text_primary))
-                    .child("+")
+                    .hover(|s| s.bg(theme.bg_hover))
+                    .child(icons::render_icon(
+                        IconName::Plus,
+                        px(12.0),
+                        theme.text_secondary,
+                    ))
                     .on_mouse_down(MouseButton::Left, move |_, win, cx| {
                         cx.stop_propagation();
                         on_new_tab(win, cx);
@@ -349,8 +376,8 @@ impl TerminalDock {
                             .px_1p5()
                             .py_0p5()
                             .rounded_xs()
-                            .bg(theme.bg_hover)
-                            .text_xs()
+                            .bg(theme.bg_elevated)
+                            .text_size(px(11.0))
                             .text_color(theme.dirty_indicator)
                             .child("● running")
                     } else {
@@ -358,7 +385,7 @@ impl TerminalDock {
                             .px_1p5()
                             .py_0p5()
                             .rounded_xs()
-                            .text_xs()
+                            .text_size(px(11.0))
                             .text_color(theme.text_muted)
                             .child(format!("~/{}", dir_name))
                     })
@@ -368,12 +395,19 @@ impl TerminalDock {
                             .px_2()
                             .rounded_xs()
                             .bg(theme.error)
-                            .text_color(rgb(0xffffff))
+                            .text_color(theme.text_on_error)
                             .text_xs()
                             .flex()
                             .items_center()
+                            .gap_1()
                             .cursor_pointer()
-                            .child("■ Stop")
+                            .hover(|s| s.opacity(0.9))
+                            .child(icons::render_icon(
+                                IconName::Stop,
+                                px(10.0),
+                                theme.text_on_error,
+                            ))
+                            .child("Stop")
                             .on_mouse_down(MouseButton::Left, move |_, win, cx| {
                                 cx.stop_propagation();
                                 on_interrupt(win, cx);
@@ -391,8 +425,15 @@ impl TerminalDock {
                             .text_xs()
                             .flex()
                             .items_center()
+                            .gap_1()
                             .cursor_pointer()
-                            .child("↓ Latest")
+                            .hover(|s| s.opacity(0.9))
+                            .child(icons::render_icon(
+                                IconName::ArrowDown,
+                                px(11.0),
+                                theme.text_on_accent,
+                            ))
+                            .child("Latest")
                             .on_mouse_down(MouseButton::Left, move |_, win, cx| {
                                 cx.stop_propagation();
                                 on_latest(win, cx);
@@ -402,17 +443,19 @@ impl TerminalDock {
                     })
                     .child(
                         div()
-                            .w(px(20.0))
+                            .w(px(22.0))
                             .h(px(20.0))
                             .rounded_xs()
                             .flex()
                             .items_center()
                             .justify_center()
                             .cursor_pointer()
-                            .text_xs()
-                            .text_color(theme.text_secondary)
-                            .hover(|s| s.bg(theme.bg_hover).text_color(theme.text_primary))
-                            .child("⟳")
+                            .hover(|s| s.bg(theme.bg_hover))
+                            .child(icons::render_icon(
+                                IconName::Refresh,
+                                px(12.0),
+                                theme.text_secondary,
+                            ))
                             .on_mouse_down(MouseButton::Left, move |_, win, cx| {
                                 cx.stop_propagation();
                                 on_restart(win, cx);
@@ -420,17 +463,19 @@ impl TerminalDock {
                     )
                     .child(
                         div()
-                            .w(px(20.0))
+                            .w(px(22.0))
                             .h(px(20.0))
                             .rounded_xs()
                             .flex()
                             .items_center()
                             .justify_center()
                             .cursor_pointer()
-                            .text_xs()
-                            .text_color(theme.text_secondary)
-                            .hover(|s| s.bg(theme.bg_hover).text_color(theme.text_primary))
-                            .child("↗")
+                            .hover(|s| s.bg(theme.bg_hover))
+                            .child(icons::render_icon(
+                                IconName::ExternalLink,
+                                px(12.0),
+                                theme.text_secondary,
+                            ))
                             .on_mouse_down(MouseButton::Left, move |_, win, cx| {
                                 cx.stop_propagation();
                                 on_open_external(win, cx);
@@ -438,17 +483,19 @@ impl TerminalDock {
                     )
                     .child(
                         div()
-                            .w(px(20.0))
+                            .w(px(22.0))
                             .h(px(20.0))
                             .rounded_xs()
                             .flex()
                             .items_center()
                             .justify_center()
                             .cursor_pointer()
-                            .text_xs()
-                            .text_color(theme.text_secondary)
-                            .hover(|s| s.bg(theme.bg_hover).text_color(theme.text_primary))
-                            .child("⌫")
+                            .hover(|s| s.bg(theme.bg_hover))
+                            .child(icons::render_icon(
+                                IconName::Trash,
+                                px(12.0),
+                                theme.text_secondary,
+                            ))
                             .on_mouse_down(MouseButton::Left, move |_, win, cx| {
                                 cx.stop_propagation();
                                 on_clear(win, cx);
@@ -456,17 +503,18 @@ impl TerminalDock {
                     )
                     .child(
                         div()
-                            .w(px(20.0))
+                            .w(px(22.0))
                             .h(px(20.0))
                             .rounded_xs()
                             .flex()
                             .items_center()
                             .justify_center()
                             .cursor_pointer()
-                            .text_xs()
-                            .text_color(theme.text_secondary)
-                            .hover(|s| s.bg(theme.bg_hover).text_color(theme.error))
-                            .child("✕")
+                            .hover(|s| s.bg(theme.bg_hover))
+                            .child(
+                                icons::render_icon(IconName::Close, px(12.0), theme.text_secondary)
+                                    .hover(|s| s.text_color(theme.error)),
+                            )
                             .on_mouse_down(MouseButton::Left, move |_, win, cx| {
                                 cx.stop_propagation();
                                 on_close_dock(win, cx);
@@ -474,6 +522,18 @@ impl TerminalDock {
                     ),
             )
             .into_any_element();
+
+        let term_scroll_from_top = total
+            .saturating_sub(visible_count)
+            .saturating_sub(term.scroll_offset);
+        let term_scrollbar = scrollbar::render_vertical_scrollbar(
+            total,
+            visible_count,
+            term_scroll_from_top,
+            avail_h,
+            theme,
+            None,
+        );
 
         div()
             .h(px(terminal_height))
@@ -499,10 +559,20 @@ impl TerminalDock {
             .child(
                 div()
                     .flex_1()
-                    .overflow_hidden()
-                    .p_2p5()
+                    .min_h_0()
+                    .flex()
+                    .flex_row()
                     .bg(theme.bg_terminal)
-                    .children(output_divs),
+                    .overflow_hidden()
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .overflow_hidden()
+                            .p_2p5()
+                            .children(output_divs),
+                    )
+                    .children(term_scrollbar),
             )
             .into_any_element()
     }

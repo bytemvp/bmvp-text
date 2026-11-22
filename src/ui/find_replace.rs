@@ -1,4 +1,5 @@
 use crate::core::buffer::SearchOptions;
+use crate::ui::icons::{self, IconName};
 use crate::ui::theme::Theme;
 use crate::ui::{UiAction, UiAction1};
 use gpui::*;
@@ -198,30 +199,37 @@ impl FindState {
             .gap_1p5()
             .child(
                 div()
-                    .w_4()
+                    .w_5()
                     .h_5()
                     .rounded_xs()
                     .flex()
                     .items_center()
                     .justify_center()
                     .cursor_pointer()
-                    .hover(|s| s.bg(theme.bg_hover).text_color(theme.text_primary))
-                    .text_color(theme.text_secondary)
-                    .child(if self.show_replace { "▾" } else { "▸" })
+                    .hover(|s| s.bg(theme.bg_hover))
+                    .child(icons::render_icon(
+                        if self.show_replace {
+                            IconName::ChevronDown
+                        } else {
+                            IconName::ChevronRight
+                        },
+                        px(12.0),
+                        theme.text_secondary,
+                    ))
                     .on_mouse_down(MouseButton::Left, move |_, win, cx| {
                         cx.stop_propagation();
                         on_toggle_replace(win, cx);
                     }),
             )
-            .child(div().text_color(theme.accent).child("⌕"))
+            .child(icons::render_icon(IconName::Search, px(13.0), theme.accent))
             .child(
                 div()
-                    .w(px(176.0))
+                    .w(px(184.0))
                     .h_6()
                     .bg(theme.bg_editor)
                     .border_1()
                     .border_color(if query_focused {
-                        theme.accent
+                        theme.border_focused
                     } else {
                         theme.border_subtle
                     })
@@ -266,7 +274,7 @@ impl FindState {
             ))
             .child(
                 div()
-                    .min_w(px(46.0))
+                    .min_w(px(50.0))
                     .text_xs()
                     .text_color(
                         if self.regex_error.is_some()
@@ -288,9 +296,12 @@ impl FindState {
                     .items_center()
                     .justify_center()
                     .cursor_pointer()
-                    .hover(|s| s.bg(theme.bg_hover).text_color(theme.text_primary))
-                    .text_color(theme.text_muted)
-                    .child("↑")
+                    .hover(|s| s.bg(theme.bg_hover))
+                    .child(icons::render_icon(
+                        IconName::ArrowUp,
+                        px(12.0),
+                        theme.text_secondary,
+                    ))
                     .on_mouse_down(MouseButton::Left, move |_, win, cx| {
                         cx.stop_propagation();
                         on_prev(win, cx);
@@ -305,9 +316,12 @@ impl FindState {
                     .items_center()
                     .justify_center()
                     .cursor_pointer()
-                    .hover(|s| s.bg(theme.bg_hover).text_color(theme.text_primary))
-                    .text_color(theme.text_muted)
-                    .child("↓")
+                    .hover(|s| s.bg(theme.bg_hover))
+                    .child(icons::render_icon(
+                        IconName::ArrowDown,
+                        px(12.0),
+                        theme.text_secondary,
+                    ))
                     .on_mouse_down(MouseButton::Left, move |_, win, cx| {
                         cx.stop_propagation();
                         on_next(win, cx);
@@ -322,9 +336,11 @@ impl FindState {
                     .items_center()
                     .justify_center()
                     .cursor_pointer()
-                    .hover(|s| s.bg(theme.bg_hover).text_color(theme.error))
-                    .text_color(theme.text_muted)
-                    .child("✕")
+                    .hover(|s| s.bg(theme.bg_hover))
+                    .child(
+                        icons::render_icon(IconName::Close, px(11.0), theme.text_muted)
+                            .hover(|s| s.text_color(theme.error)),
+                    )
                     .on_mouse_down(MouseButton::Left, move |_, win, cx| {
                         cx.stop_propagation();
                         on_close(win, cx);
@@ -338,15 +354,15 @@ impl FindState {
                     .flex()
                     .items_center()
                     .gap_1p5()
-                    .pl(px(34.0))
+                    .pl(px(44.0))
                     .child(
                         div()
-                            .w(px(176.0))
+                            .w(px(184.0))
                             .h_6()
                             .bg(theme.bg_editor)
                             .border_1()
                             .border_color(if replace_focused {
-                                theme.accent
+                                theme.border_focused
                             } else {
                                 theme.border_subtle
                             })
@@ -377,9 +393,11 @@ impl FindState {
                             .px_2()
                             .rounded_xs()
                             .cursor_pointer()
-                            .bg(theme.bg_hover)
+                            .bg(theme.bg_elevated)
+                            .border_1()
+                            .border_color(theme.border_subtle)
                             .text_color(theme.text_primary)
-                            .hover(|s| s.opacity(0.85))
+                            .hover(|s| s.bg(theme.bg_hover))
                             .flex()
                             .items_center()
                             .text_xs()
@@ -395,9 +413,11 @@ impl FindState {
                             .px_2()
                             .rounded_xs()
                             .cursor_pointer()
-                            .bg(theme.bg_hover)
+                            .bg(theme.bg_elevated)
+                            .border_1()
+                            .border_color(theme.border_subtle)
                             .text_color(theme.text_primary)
-                            .hover(|s| s.opacity(0.85))
+                            .hover(|s| s.bg(theme.bg_hover))
                             .flex()
                             .items_center()
                             .text_xs()
@@ -416,16 +436,16 @@ impl FindState {
             .absolute()
             .top(px(8.0))
             .right(px(16.0))
-            .bg(theme.bg_surface)
+            .bg(theme.bg_modal)
             .border_1()
             .border_color(theme.border)
-            .rounded_md()
-            .shadow_md()
+            .rounded_lg()
+            .shadow_lg()
             .flex()
             .flex_col()
             .gap_1()
-            .py_1()
-            .px_2()
+            .py_1p5()
+            .px_2p5()
             .text_xs()
             .occlude()
             .on_mouse_down(MouseButton::Left, |_, _, cx| {
