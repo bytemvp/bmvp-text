@@ -15,10 +15,18 @@ pub struct BreadcrumbBar;
 impl BreadcrumbBar {
     pub fn format_path(file_path: Option<&str>, root_path: Option<&Path>) -> String {
         if let Some(p) = file_path {
-            if let Some(root) = root_path
-                && let Ok(rel) = Path::new(p).strip_prefix(root)
-            {
-                return rel.to_string_lossy().replace(['\\', '/'], " › ");
+            if let Some(root) = root_path {
+                if let Ok(rel) = Path::new(p).strip_prefix(root) {
+                    return rel.to_string_lossy().replace(['\\', '/'], " › ");
+                }
+                let root_str = root.to_string_lossy();
+                if p.contains('\\') || root_str.contains('\\') {
+                    let norm_p = p.replace('\\', "/");
+                    let norm_root = root_str.replace('\\', "/");
+                    if let Ok(rel) = Path::new(&norm_p).strip_prefix(Path::new(&norm_root)) {
+                        return rel.to_string_lossy().replace(['\\', '/'], " › ");
+                    }
+                }
             }
             p.replace(['\\', '/'], " › ")
         } else {
@@ -178,6 +186,17 @@ mod tests {
         assert_eq!(
             BreadcrumbBar::format_path(Some("/etc/hosts"), Some(root_posix)),
             " › etc › hosts"
+        );
+        assert_eq!(
+            BreadcrumbBar::format_path(Some(r"C:\other\file.rs"), Some(root_win)),
+            "C: › other › file.rs"
+        );
+        assert_eq!(
+            BreadcrumbBar::format_path(
+                Some(r"C:\work\bmvp-text/src/main.rs"),
+                Some(Path::new(r"C:\work\bmvp-text\"))
+            ),
+            "src › main.rs"
         );
     }
 }
